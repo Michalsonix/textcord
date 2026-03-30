@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="app-layout">
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+ _ __ ___   ___  ___ ___  __ _  __ _  ___  ___
+| '_ ` _ \ / _ \/ __/ __|/ _` |/ _` |/ _ \/ __|
+| | | | | |  __/\__ \__ \ (_| | (_| |  __/\__ \
+|_| |_| |_|\___||___/___/\__,_|\__, |\___||___/
+                                __/ |
+                               |___/
+        </div>
+        <div class="sidebar-contacts" id="contacts-list">
+            {% for c in contacts %}
+            <div class="contact-item" data-user-id="{{ c.user.id }}" data-is-system="{{ 'true' if c.user.identifier == 'SYSTEM' else 'false' }}" onclick="selectContact('{{ c.user.id }}')">
+                <div class="contact-name">{{ c.custom_name or c.user.full_name }}</div>
+                {% if c.user.nickname %}
+                <div class="contact-nick">{{ c.user.nickname }}</div>
+                {% endif %}
+                <div class="contact-status {{ 'online' if c.user.is_active_now() else '' }}">{{ c.user.activity_status() }}</div>
+                {% if c.user.is_deleted %}
+                <div class="contact-deleted">Deleted, read-only</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="chat-area" id="chat-area">
+        <div class="topbar">
+            {% if is_admin %}
+            <a href="/adminpage">Admin Dashboard</a>
+            {% endif %}
+            <a href="/logout">Logout</a>
+            <a href="/account">Account Settings</a>
+        </div>
+        <div class="no-chat-selected" id="no-chat">
+            Select a contact to start chatting
+        </div>
+        <div class="hidden" id="chat-container" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+            <div class="chat-header">
+                <span class="chat-header-name" id="chat-header-name"></span>
+                <div class="chat-header-actions">
+                    <button class="btn" onclick="openChatSettings()" title="Chat Settings">⚙</button>
+                </div>
+            </div>
+            <div class="chat-messages" id="chat-messages"></div>
+            <div id="reply-container" style="display:none;" class="reply-preview">
+                <span id="reply-text"></span>
+                <button onclick="cancelReply()" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-family:inherit;">✕</button>
+            </div>
+            <div class="chat-input-area">
+                <textarea id="message-input" placeholder="Type a message..." rows="1" onkeydown="handleInputKey(event)" oninput="autoResize(this)"></textarea>
+                <button class="btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chat Settings Modal -->
+<div class="modal-overlay hidden" id="chat-settings-modal">
+    <div class="modal">
+        <button class="modal-close" onclick="closeChatSettings()">✕</button>
+        <h2>Chat Settings</h2>
+        <button class="btn btn-full btn-danger" style="margin-bottom:10px;" onclick="deleteChatHistory()">Delete Chat History (yours only)</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="block-btn" onclick="toggleBlock()">Block User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-btn" onclick="toggleMute()">Mute User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openRenameModal()">Rename User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openSearchModal()">Search in Conversation</button>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div class="modal-overlay hidden" id="rename-modal">
+    <div class="modal">
+        <button class="modal-close" onclick="closeRenameModal()">✕</button>
+        <h2>Set Custom Name</h2>
+        <div class="form-row">
+            <input type="text" id="rename-input" placeholder="Enter nickname">
+        </div>
+        <div style="display:flex;gap:10px;margin-top:10px;">
+            <button class="btn btn-success" onclick="saveRename()">Save</button>
+            <button class="btn" onclick="closeRenameModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Search Modal -->
+<div class="modal-overlay hidden" id="search-modal">
+    <div class="modal">
+        <button class="modal-close" onclick="closeSearchModal()">✕</button>
+        <h2>Search in Conversation</h2>
+        <div class="form-row">
+            <input type="text" id="search-input" placeholder="Enter word or phrase" oninput="searchMessages()">
+        </div>
+        <div id="search-results" style="margin-top:10px;max-height:300px;overflow-y:auto;">
+            <p style="color:var(--text-dim);font-size:12px;">No results</p>
+        </div>
+    </div>
+</div>
+
+<!-- Message Action Menu (reusable) -->
+<div class="message-menu hidden" id="msg-action-menu" style="position:fixed;z-index:200;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentUserId = "{{ current_user.id }}";
+let currentContactId = null;
+let replyToId = null;
+let messageRefreshInterval = null;
+
+const socket = io();
+
+socket.on('force_logout', function(data) {
+    alert(data.reason || 'You have been disconnected.');
+    window.location.href = '/login';
+});
+
+socket.on('new_message', function(data) {
+    if (data.sender_id === currentContactId) {
+        appendMessage(data, false);
+        scrollToBottom();
+    }
+});
+
+function selectContact(userId) {
+    currentContactId = userId;
+    document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
+    document.querySelector(`[data-user-id="${userId}"]`).classList.add('active');
+    
+    document.getElementById('no-chat').style.display = 'none';
+    const container = document.getElementById('chat-container');
+    container.style.display = 'flex';
+    container.classList.remove('hidden');
+    
+    const contact = document.querySelector(`[data-user-id="${userId}"]`);
+    document.getElementById('chat-header-name').textContent = contact.querySelector('.contact-name').textContent;
+    
+    // Hide input for SYSTEM contact
+    const isSystem = contact.dataset.isSystem === 'true';
+    document.querySelector('.chat-input-area').style.display = isSystem ? 'none' : 'flex';
+    document.getElementById('reply-container').style.display = 'none';
+    
+    loadMessages();
+    if (messageRefreshInterval) clearInterval(messageRefreshInterval);
+    messageRefreshInterval = setInterval(loadMessages, 3000);
+    
+    // Mobile: show chat, hide sidebar
+    if (window.innerWidth <= 768) {
+        document.getElementById('sidebar').classList.add('hidden');
+        document.getElementById('chat-area').classList.add('active');
+    }
+}
+
+function loadMessages() {
+    if (!currentContactId) return;
+    fetch(`/api/messages/${currentContactId}`)
+        .then(r => r.json())
+        .then(msgs => {
+            const container = document.getElementById('chat-messages');
+            const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+            container.innerHTML = '';
+            msgs.forEach(m => appendMessage(m, m.is_mine));
+            if (wasAtBottom) scrollToBottom();
+        });
+}
+
+function appendMessage(msg, isMine) {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    
+    if (msg.is_system) {
+        div.className = 'message system';
+        div.innerHTML = `<div class="message-content">${escapeHtml(msg.content)}</div>
+            <div class="message-meta"><span>${msg.created_at}</span></div>`;
+    } else {
+        div.className = `message ${isMine || msg.is_mine ? 'mine' : 'theirs'}`;
+        let replyHtml = '';
+        if (msg.reply_to_content) {
+            replyHtml = `<div class="message-reply"><strong>${escapeHtml(msg.reply_to_sender)}:</strong> ${escapeHtml(msg.reply_to_content.substring(0, 50))}</div>`;
+        }
+        
+        const statusClass = msg.status === 'read' ? 'read' : (msg.status === 'error' ? 'error' : '');
+        const statusText = msg.status || 'sent';
+        
+        div.innerHTML = `
+            ${replyHtml}
+            <div class="message-sender">${escapeHtml(msg.sender_name)}</div>
+            <div class="message-content">${escapeHtml(msg.content)}</div>
+            <div class="message-meta">
+                <span>${msg.created_at}</span>
+                <span class="message-status ${statusClass}">${statusText}</span>
+            </div>
+            <div class="message-actions" onclick="showMsgMenu(event, '${msg.id}', ${isMine || msg.is_mine})">⋯</div>
+        `;
+    }
+    container.appendChild(div);
+}
+
+function showMsgMenu(event, msgId, isMine) {
+    event.stopPropagation();
+    const menu = document.getElementById('msg-action-menu');
+    menu.innerHTML = '';
+    menu.style.left = event.clientX + 'px';
+    menu.style.top = event.clientY + 'px';
+    menu.classList.remove('hidden');
+    
+    if (isMine) {
+        menu.innerHTML += `<div class="message-menu-item" onclick="deleteMsg('${msgId}','self')">Delete for me</div>`;
+        menu.innerHTML += `<div class="message-menu-item danger" onclick="deleteMsg('${msgId}','all')">Delete for everyone</div>`;
+    } else {
+        menu.innerHTML += `<div class="message-menu-item" onclick="deleteMsg('${msgId}','self')">Delete for me</div>`;
+        menu.innerHTML += `<div class="message-menu-item danger" onclick="reportMsg('${msgId}')">Report to admin</div>`;
+    }
+    menu.innerHTML += `<div class="message-menu-item" onclick="setReply('${msgId}')">Reply</div>`;
+    
+    document.addEventListener('click', () => menu.classList.add('hidden'), { once: true });
+}
+
+function deleteMsg(msgId, mode) {
+    fetch('/api/messages/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ message_id: msgId, mode: mode })
+    }).then(() => loadMessages());
+    document.getElementById('msg-action-menu').classList.add('hidden');
+}
+
+function reportMsg(msgId) {
+    fetch('/api/messages/report', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ message_id: msgId })
+    }).then(() => alert('Message reported to admin.'));
+    document.getElementById('msg-action-menu').classList.add('hidden');
+}
+
+function setReply(msgId) {
+    replyToId = msgId;
+    document.getElementById('reply-container').style.display = 'flex';
+    document.getElementById('reply-text').textContent = 'Replying to message...';
+    document.getElementById('msg-action-menu').classList.add('hidden');
+    document.getElementById('message-input').focus();
+}
+
+function cancelReply() {
+    replyToId = null;
+    document.getElementById('reply-container').style.display = 'none';
+}
+
+function sendMessage() {
+    const input = document.getElementById('message-input');
+    const content = input.value.trim();
+    if (!content || !currentContactId) return;
+    
+    fetch('/api/messages/send', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ receiver_id: currentContactId, content: content, reply_to_id: replyToId })
+    }).then(r => r.json()).then(data => {
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+        input.value = '';
+        input.style.height = 'auto';
+        cancelReply();
+        loadMessages();
+        scrollToBottom();
+    });
+}
+
+function handleInputKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+}
+
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+
+function scrollToBottom() {
+    const el = document.getElementById('chat-messages');
+    setTimeout(() => el.scrollTop = el.scrollHeight, 50);
+}
+
+function escapeHtml(text) {
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+// Chat Settings
+function openChatSettings() { document.getElementById('chat-settings-modal').classList.remove('hidden'); }
+function closeChatSettings() { document.getElementById('chat-settings-modal').classList.add('hidden'); }
+
+function deleteChatHistory() {
+    if (!confirm('Delete your chat history with this user?')) return;
+    fetch('/api/chat/delete-history', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ contact_id: currentContactId })
+    }).then(() => { loadMessages(); closeChatSettings(); });
+}
+
+function toggleBlock() {
+    const btn = document.getElementById('block-btn');
+    const action = btn.textContent.includes('Unblock') ? 'unblock' : 'block';
+    fetch(`/api/chat/${action}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ contact_id: currentContactId })
+    }).then(() => {
+        btn.textContent = action === 'block' ? 'Unblock User' : 'Block User';
+        closeChatSettings();
+    });
+}
+
+function toggleMute() {
+    const btn = document.getElementById('mute-btn');
+    const action = btn.textContent.includes('Unmute') ? 'unmute' : 'mute';
+    fetch(`/api/chat/${action}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ contact_id: currentContactId })
+    }).then(() => {
+        btn.textContent = action === 'mute' ? 'Unmute User' : 'Mute User';
+        closeChatSettings();
+    });
+}
+
+function openRenameModal() {
+    closeChatSettings();
+    document.getElementById('rename-modal').classList.remove('hidden');
+}
+function closeRenameModal() { document.getElementById('rename-modal').classList.add('hidden'); }
+
+function saveRename() {
+    const name = document.getElementById('rename-input').value.trim();
+    fetch('/api/chat/rename', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ contact_id: currentContactId, custom_name: name })
+    }).then(() => { closeRenameModal(); location.reload(); });
+}
+
+function openSearchModal() {
+    closeChatSettings();
+    document.getElementById('search-modal').classList.remove('hidden');
+    document.getElementById('search-input').value = '';
+    document.getElementById('search-results').innerHTML = '<p style="color:var(--text-dim);font-size:12px;">No results</p>';
+}
+function closeSearchModal() { document.getElementById('search-modal').classList.add('hidden'); }
+
+function searchMessages() {
+    const q = document.getElementById('search-input').value.trim();
+    const results = document.getElementById('search-results');
+    if (!q) { results.innerHTML = '<p style="color:var(--text-dim);font-size:12px;">No results</p>'; return; }
+    
+    fetch(`/api/messages/search/${currentContactId}?q=${encodeURIComponent(q)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.length === 0) {
+                results.innerHTML = '<p style="color:var(--text-dim);font-size:12px;">No results</p>';
+            } else {
+                results.innerHTML = data.map(m => 
+                    `<div style="border:1px solid var(--border);padding:8px;margin-bottom:5px;font-size:12px;">
+                        <strong>${escapeHtml(m.sender_name)}</strong> - ${m.created_at}<br>
+                        ${escapeHtml(m.content)}
+                    </div>`
+                ).join('');
+            }
+        });
+}
+</script>
+{% endblock %}
