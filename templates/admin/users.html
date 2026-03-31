@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:10px;">
+    <div class="topbar" style="border:none;padding:0;margin-bottom:10px;">
+        <a href="/adminpage" class="btn">← Back to Dashboard</a>
+    </div>
+    <div class="admin-3col">
+        <div class="admin-col-users">
+            <div class="admin-user-header">Users</div>
+            {% for u in users %}
+            <div class="contact-item" onclick="selectUser('{{ u.id }}')">
+                <div class="contact-name">{{ u.full_name }}</div>
+                {% if u.nickname %}<div class="contact-nick">{{ u.nickname }}</div>{% endif %}
+                <div class="contact-status {{ 'online' if u.is_active_now() else '' }}">{{ u.activity_status() }}</div>
+                {% if u.is_deleted %}<div class="contact-deleted">Deleted, read-only</div>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="admin-col-options" id="options-col">
+            <div class="admin-user-header" id="selected-user-name">Select a user</div>
+            <div class="admin-option" onclick="showPanel('login-logs')">Login Logs</div>
+            <div class="admin-option" onclick="showPanel('reports-by')">Reports by User</div>
+            <div class="admin-option" onclick="showPanel('reports-on')">Reports on User</div>
+            <div class="admin-option" onclick="showPanel('ban')">Ban / Unban</div>
+            <div class="admin-option" onclick="showPanel('password')">Change Password</div>
+            <div class="admin-option" onclick="showPanel('recovery')">Recovery Files</div>
+            <div class="admin-option" onclick="showPanel('info')">User Info</div>
+        </div>
+        <div class="admin-col-detail" id="detail-col">
+            <p style="color:var(--text-dim);">Select a user and option</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedUserId = null;
+let userData = null;
+
+function selectUser(userId) {
+    selectedUserId = userId;
+    fetch(`/api/admin/user/${userId}`).then(r=>r.json()).then(data => {
+        userData = data;
+        document.getElementById('selected-user-name').textContent = `${data.first_name} ${data.last_name}` + (data.nickname ? ` (${data.nickname})` : '');
+        document.getElementById('detail-col').innerHTML = '<p style="color:var(--text-dim);">Select an option</p>';
+    });
+}
+
+function showPanel(panel) {
+    if (!userData) return;
+    const col = document.getElementById('detail-col');
+    
+    if (panel === 'login-logs') {
+        col.innerHTML = `<h2>Login Logs</h2>` + userData.login_logs.map(l =>
+            `<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:5px 0;font-size:12px;">
+                <span>${l.date} - ${l.ip} - ${l.success ? '✓' : '✗'}</span>
+                <button class="btn" style="padding:2px 6px;font-size:10px;" onclick="deleteLog('${l.id}')">Del</button>
+            </div>`
+        ).join('') || '<p style="color:var(--text-dim);">No logs</p>';
+    }
+    else if (panel === 'reports-by') {
+        col.innerHTML = `<h2>Reports by ${userData.first_name} (${userData.reports_by_count})</h2>` +
+            userData.reports_by.map(r => `<div style="border:1px solid var(--border);padding:8px;margin-bottom:5px;font-size:12px;">
+                To: ${r.reported} - ${r.date}<br>${r.message}</div>`).join('') || '<p style="color:var(--text-dim);">None</p>';
+    }
+    else if (panel === 'reports-on') {
+        col.innerHTML = `<h2>Reports on ${userData.first_name} (${userData.reports_on_count})</h2>` +
+            userData.reports_on.map(r => `<div style="border:1px solid var(--border);padding:8px;margin-bottom:5px;font-size:12px;">
+                From: ${r.reporter} - ${r.date}<br>${r.message}</div>`).join('') || '<p style="color:var(--text-dim);">None</p>';
+    }
+    else if (panel === 'ban') {
+        if (userData.is_banned) {
+            const exp = userData.ban_expires ? new Date(userData.ban_expires).toLocaleString() : 'Never (permanent)';
+            col.innerHTML = `<h2>User is BANNED</h2>
+                <div class="admin-info-row"><span class="admin-info-label">Reason:</span><span class="admin-info-value">${userData.ban_reason || 'N/A'}</span></div>
+                <div class="admin-info-row"><span class="admin-info-label">Expires:</span><span class="admin-info-value">${exp}</span></div>
+                <div style="display:flex;gap:10px;margin-top:15px;flex-wrap:wrap;">
+                    <button class="btn btn-success" onclick="unbanUser()">Unban</button>
+                    <button class="btn btn-warning" onclick="showReduceBan()">Reduce Ban</button>
+                    <button class="btn" onclick="changeBanType()">${userData.ban_expires ? 'Make Permanent' : 'Make Timed'}</button>
+                </div>
+                <div id="reduce-ban-area" class="hidden" style="margin-top:15px;border:1px solid var(--border);padding:10px;">
+                    <div class="form-row"><input type="number" id="reduce-amount" value="1" min="1" style="width:80px;">
+                    <select id="reduce-unit"><option value="s">sec</option><option value="m">min</option><option value="h" selected>hours</option><option value="d">days</option><option value="y">years</option></select></div>
+                    <div style="display:flex;gap:10px;margin-top:10px;">
+                        <button class="btn btn-warning" onclick="reduceBan()">Reduce</button>
+                        <button class="btn" onclick="document.getElementById('reduce-ban-area').classList.add('hidden')">Back</button>
+                    </div>
+                </div>`;
+        } else {
+            col.innerHTML = `<h2>User is NOT banned</h2>
+                <div style="margin-top:15px;">
+                    <h3 style="margin-bottom:10px;">Ban User</h3>
+                    <div class="form-row"><label>Type</label><select id="ban-type" onchange="toggleBanDuration()">
+                        <option value="permanent">Permanent</option><option value="timed">Timed</option></select></div>
+                    <div id="ban-duration-area" class="hidden">
+                        <div class="form-row"><label>Duration</label><input type="number" id="ban-duration" value="24" min="1" style="width:80px;">
+                        <select id="ban-unit"><option value="m">min</option><option value="h" selected>hours</option><option value="d">days</option><option value="y">years</option></select></div>
+                    </div>
+                    <div class="form-row"><label>Reason</label><input type="text" id="ban-reason" placeholder="Reason for ban"></div>
+                    <button class="btn btn-danger" onclick="banUser()">Ban User</button>
+                </div>`;
+        }
+    }
+    else if (panel === 'password') {
+        col.innerHTML = `<h2>Change Password</h2>
+            <button class="btn" style="margin-bottom:10px;width:100%;" onclick="genPassword()">Generate New Password (force change on login)</button>
+            <div id="gen-pass-result" class="hidden" style="border:1px solid var(--success);padding:10px;margin-bottom:10px;"></div>
+            <hr style="border-color:var(--border);margin:15px 0;">
+            <div class="form-row"><input type="password" id="admin-new-pass" placeholder="Set new password"></div>
+            <button class="btn btn-warning" onclick="setPassword()">Set Password</button>
+            <hr style="border-color:var(--border);margin:15px 0;">
+            <h3>Disable Recovery Files</h3>` +
+            (userData.recovery_files.length ? userData.recovery_files.map(rf => 
+                `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;">
+                    <span>${rf.date} ${rf.admin ? '(admin)' : ''}</span>
+                    <button class="btn btn-danger" style="padding:2px 6px;font-size:10px;" onclick="disableRecovery('${rf.id}')">Delete</button>
+                </div>`).join('') : '<p style="color:var(--text-dim);">No active files</p>');
+    }
+    else if (panel === 'recovery') {
+        col.innerHTML = `<h2>Generate Recovery File</h2>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">Admin-generated files don't count toward user's 3-file limit but still single-use.</p>
+            <button class="btn" onclick="adminGenRecovery()">Generate & Download</button>`;
+    }
+    else if (panel === 'info') {
+        col.innerHTML = `<h2>User Info</h2>
+            <div class="admin-info-row"><span class="admin-info-label">Identifier:</span><span class="admin-info-value">${userData.identifier}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Name:</span><span class="admin-info-value">${userData.first_name} ${userData.last_name}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Nickname:</span><span class="admin-info-value">${userData.nickname || 'None'}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Role:</span><span class="admin-info-value">${userData.role}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Status:</span><span class="admin-info-value">${userData.activity_status}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Banned:</span><span class="admin-info-value">${userData.is_banned ? 'Yes' : 'No'}</span></div>
+            <div class="admin-info-row"><span class="admin-info-label">Panic Lock:</span><span class="admin-info-value">${userData.is_panic_locked ? 'Yes' : 'No'}</span></div>
+            ${userData.is_panic_locked ? '<button class="btn btn-success" style="margin-top:10px;" onclick="unlockPanic()">Unlock Panic Lock</button>' : ''}`;
+    }
+}
+
+function toggleBanDuration() {
+    document.getElementById('ban-duration-area').classList.toggle('hidden', document.getElementById('ban-type').value === 'permanent');
+}
+
+function banUser() {
+    const data = { type: document.getElementById('ban-type').value, reason: document.getElementById('ban-reason').value };
+    if (data.type === 'timed') {
+        data.duration = document.getElementById('ban-duration').value;
+        data.unit = document.getElementById('ban-unit').value;
+    }
+    fetch(`/api/admin/user/${selectedUserId}/ban`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) })
+    .then(() => { selectUser(selectedUserId); showPanel('ban'); });
+}
+
+function unbanUser() {
+    fetch(`/api/admin/user/${selectedUserId}/unban`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(() => { selectUser(selectedUserId); showPanel('ban'); });
+}
+
+function showReduceBan() { document.getElementById('reduce-ban-area').classList.remove('hidden'); }
+
+function reduceBan() {
+    fetch(`/api/admin/user/${selectedUserId}/reduce-ban`, { method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ amount: document.getElementById('reduce-amount').value, unit: document.getElementById('reduce-unit').value })
+    }).then(() => { selectUser(selectedUserId); showPanel('ban'); });
+}
+
+function changeBanType() {
+    const newType = userData.ban_expires ? 'permanent' : 'timed';
+    const body = { type: newType };
+    if (newType === 'timed') { body.duration = 24; body.unit = 'h'; }
+    fetch(`/api/admin/user/${selectedUserId}/change-ban-type`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    .then(() => { selectUser(selectedUserId); showPanel('ban'); });
+}
+
+function genPassword() {
+    fetch(`/api/admin/user/${selectedUserId}/change-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:'generate'}) })
+    .then(r=>r.json()).then(d => {
+        const el = document.getElementById('gen-pass-result');
+        el.classList.remove('hidden');
+        el.innerHTML = `Generated password: <strong>${d.generated_password}</strong><br><small>User must change it on next login.</small>`;
+    });
+}
+
+function setPassword() {
+    const pass = document.getElementById('admin-new-pass').value;
+    fetch(`/api/admin/user/${selectedUserId}/change-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:'set', password:pass}) })
+    .then(r=>r.json()).then(d => { if(d.error) alert(d.error); else alert('Password changed!'); });
+}
+
+function disableRecovery(recId) {
+    fetch(`/api/admin/user/${selectedUserId}/change-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:'disable_recovery', recovery_id:recId}) })
+    .then(() => { selectUser(selectedUserId); showPanel('password'); });
+}
+
+function adminGenRecovery() {
+    window.location.href = `/api/admin/user/${selectedUserId}/generate-recovery`;
+}
+
+function unlockPanic() {
+    fetch(`/api/admin/user/${selectedUserId}/unlock-panic`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(() => { selectUser(selectedUserId); showPanel('info'); });
+}
+
+function deleteLog(logId) {
+    fetch(`/api/admin/delete-log/${logId}`, { method:'DELETE' })
+    .then(() => { selectUser(selectedUserId); showPanel('login-logs'); });
+}
+</script>
+{% endblock %}

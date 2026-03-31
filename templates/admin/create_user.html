@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="settings-page">
+    <a href="/adminpage" class="btn" style="margin-bottom:20px;">← Back to Dashboard</a>
+    <h1 style="text-transform:uppercase;letter-spacing:4px;margin-bottom:20px;">Create User</h1>
+    {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+    {% if success %}<div class="success-msg">{{ success }}</div>{% endif %}
+    <form method="POST">
+        <div class="settings-section">
+            <div class="form-row"><label>Identifier</label><input type="text" name="identifier" required></div>
+            <div class="form-row"><label>First Name</label><input type="text" name="first_name" required></div>
+            <div class="form-row"><label>Last Name</label><input type="text" name="last_name" required></div>
+            <div class="form-row"><label>Nickname</label><input type="text" name="nickname" placeholder="Optional"></div>
+            <div class="form-row">
+                <label>Password</label>
+                <input type="text" name="password" id="pass-field" required>
+                <button type="button" class="btn" onclick="document.getElementById('pass-field').value=Math.random().toString(36).slice(-12)">Generate</button>
+            </div>
+            <div class="form-row">
+                <label>Role</label>
+                <select name="role"><option value="user">User</option><option value="admin">Administrator</option></select>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" name="must_change_password" id="must-change" checked>
+                <label for="must-change">User must change password on first login</label>
+            </div>
+            <button type="submit" class="btn btn-success btn-full" style="margin-top:15px;">Create Account</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
