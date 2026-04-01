@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:20px;">
+    <div class="topbar" style="border:none;padding:0;margin-bottom:20px;">
+        <a href="/logout" class="btn">Logout</a>
+        <a href="/messages" class="btn">Go to Messages</a>
+    </div>
+    <h1 style="text-transform:uppercase;letter-spacing:4px;margin-bottom:30px;">Admin Dashboard</h1>
+    
+    <div class="admin-stats">
+        <div class="stat-box"><div class="stat-value">{{ active_users }}</div><div class="stat-label">Active Users</div></div>
+        <div class="stat-box"><div class="stat-value">{{ active_admins }}</div><div class="stat-label">Active Admins</div></div>
+        <div class="stat-box"><div class="stat-value">{{ total_users }}</div><div class="stat-label">Total Users</div></div>
+        <div class="stat-box"><div class="stat-value">{{ total_admins }}</div><div class="stat-label">Total Admins</div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">
+        <a href="/admin/users" class="btn btn-full">Manage Users</a>
+        <a href="/admin/permissions" class="btn btn-full">Manage Permissions</a>
+        <a href="/admin/reports" class="btn btn-full">Message Reports {% if pending_reports %}({{ pending_reports }}){% endif %}</a>
+        <a href="/admin/create-user" class="btn btn-full">Create User Account</a>
+        <button class="btn btn-full" onclick="openSystemMsg()">Send System Message</button>
+    </div>
+</div>
+
+<div class="modal-overlay hidden" id="sysmsg-modal">
+    <div class="modal">
+        <button class="modal-close" onclick="document.getElementById('sysmsg-modal').classList.add('hidden')">✕</button>
+        <h2>System Message</h2>
+        <div class="form-row" style="margin-top:10px;">
+            <label>Target</label>
+            <select id="sysmsg-target">
+                <option value="all">All Users</option>
+                {% for u in all_users %}
+                <option value="{{ u.id }}">{{ u.full_name }} ({{ u.identifier }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-row">
+            <textarea id="sysmsg-content" placeholder="Message content..." style="width:100%;min-height:80px;background:var(--bg);border:1px solid var(--border);color:var(--text-bright);font-family:inherit;padding:8px;"></textarea>
+        </div>
+        <button class="btn btn-success" onclick="sendSystemMsg()">Send</button>
+    </div>
+</div>
+
+<script>
+function openSystemMsg() { document.getElementById('sysmsg-modal').classList.remove('hidden'); }
+function sendSystemMsg() {
+    fetch('/api/admin/system-message', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ target: document.getElementById('sysmsg-target').value, message: document.getElementById('sysmsg-content').value })
+    }).then(r => r.json()).then(d => { if(d.ok) { alert('Sent!'); document.getElementById('sysmsg-modal').classList.add('hidden'); } else alert(d.error); });
+}
+</script>
+{% endblock %}
