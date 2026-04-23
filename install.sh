@@ -75,9 +75,22 @@ if [ "$USE_DNS" == "1" ]; then
     
     echo ""
     read -p "  Enable SSL encryption? [1=Yes (port 443) / 2=No (port 80)]: " USE_SSL_OPT
-    
+
+    HTTPS_ONLY="no"
+    USE_HSTS="no"
     if [ "$USE_SSL_OPT" == "1" ]; then
         USE_SSL="yes"
+        echo ""
+        read -p "  Listening mode? [1=HTTPS only (block HTTP) / 2=Both HTTP and HTTPS (redirect HTTP->HTTPS)]: " HTTPS_MODE
+        if [ "$HTTPS_MODE" == "1" ]; then
+            HTTPS_ONLY="yes"
+            echo ""
+            echo -e "${YELLOW}  [!] HSTS requires the CA certificate to be installed/trusted on the host machine!${NC}"
+            read -p "  Use HSTS protocol? [1=Yes / 2=No]: " HSTS_OPT
+            if [ "$HSTS_OPT" == "1" ]; then
+                USE_HSTS="yes"
+            fi
+        fi
     fi
 else
     BIND_IP="0.0.0.0"
@@ -179,12 +192,48 @@ SANEOF
     echo -e "${GREEN}[*] Client CA certificate saved to: ${CLIENT_CERT_PATH}${NC}"
     echo -e "${YELLOW}[!] Import this certificate as Trusted Root CA in your browser/OS${NC}"
     
-    sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
-server {
+    # Build HTTP block depending on HTTPS_ONLY mode
+    if [ "$HTTPS_ONLY" == "yes" ]; then
+        HTTP_BLOCK="server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    # HTTPS-only mode: refuse all plain HTTP requests
+    return 444;
+}"
+    else
+        HTTP_BLOCK="server {
     listen 80;
     server_name ${DOMAIN};
     return 301 https://\\\$server_name\\\$request_uri;
-}
+}"
+    fi
+
+    # HSTS header (only when HTTPS-only enabled and user opted in)
+    HSTS_LINE=""
+    if [ "$USE_HSTS" == "yes" ]; then
+        HSTS_LINE="    add_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;"
+    fi
+
+    # Catch-all 443 block (HTTPS-only) — drops connections to IP or wrong SNI
+    HTTPS_CATCHALL=""
+    if [ "$HTTPS_ONLY" == "yes" ]; then
+        HTTPS_CATCHALL="server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_certificate ${CERT_DIR}/server.crt;
+    ssl_certificate_key ${CERT_DIR}/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    return 444;
+}"
+    fi
+
+    sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
+${HTTP_BLOCK}
+
+${HTTPS_CATCHALL}
 
 server {
     listen 443 ssl;
@@ -194,6 +243,12 @@ server {
     ssl_certificate_key ${CERT_DIR}/server.key;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
+${HSTS_LINE}
+
+    # Block requests with non-matching Host header (e.g. accessed via IP)
+    if (\\\$host != "${DOMAIN}") {
+        return 444;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:${PORT};
@@ -204,6 +259,7 @@ server {
         proxy_set_header X-Real-IP \\\$remote_addr;
         proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \\\$scheme;
+        proxy_read_timeout 86400;
     }
 }
 NGINXEOF
@@ -244,6 +300,8 @@ DNSEOF
 cd "${INSTALL_DIR}"
 source venv/bin/activate
 export SECRET_KEY="${SECRET_KEY}"
+export TEXTCORD_HOST="127.0.0.1"
+export TEXTCORD_PORT="${PORT}"
 echo "TextCord running at https://${DOMAIN}"
 echo "Press Ctrl+C to stop."
 python3 app.py
@@ -306,6 +364,8 @@ DNSEOF
 cd "${INSTALL_DIR}"
 source venv/bin/activate
 export SECRET_KEY="${SECRET_KEY}"
+export TEXTCORD_HOST="127.0.0.1"
+export TEXTCORD_PORT="${PORT}"
 echo "TextCord running at http://${DOMAIN}"
 echo "Press Ctrl+C to stop."
 python3 app.py

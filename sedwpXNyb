@@ -721,41 +721,6 @@ def unread_counts():
     ).group_by(Message.sender_id).all()
     return jsonify({sender_id: count for sender_id, count in counts})
 
-@app.route('/api/group-unread-counts')
-@login_required
-def group_unread_counts():
-    from sqlalchemy import func
-    memberships = GroupMember.query.filter_by(user_id=current_user.id).all()
-    result = {}
-    for mem in memberships:
-        read_record = GroupMessageRead.query.filter_by(group_id=mem.group_id, user_id=current_user.id).first()
-        query = Message.query.filter(
-            Message.group_id == mem.group_id,
-            Message.sender_id != current_user.id,
-            Message.deleted_for_all == False
-        )
-        if read_record:
-            query = query.filter(Message.created_at > read_record.last_read_at)
-        count = query.count()
-        if count > 0:
-            result[mem.group_id] = count
-    return jsonify(result)
-
-@app.route('/api/groups/<group_id>/mark-read', methods=['POST'])
-@login_required
-def mark_group_read(group_id):
-    mem = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
-    if not mem:
-        return jsonify({'error': 'Not a member'}), 403
-    read_record = GroupMessageRead.query.filter_by(group_id=group_id, user_id=current_user.id).first()
-    if read_record:
-        read_record.last_read_at = datetime.utcnow()
-    else:
-        read_record = GroupMessageRead(group_id=group_id, user_id=current_user.id)
-        db.session.add(read_record)
-    db.session.commit()
-    return jsonify({'ok': True})
-
 # ─── CHAT SETTINGS ───
 
 @app.route('/api/chat/delete-history', methods=['GET', 'POST'])
@@ -1321,7 +1286,4 @@ def init_db():
 
 if __name__ == '__main__':
     init_db()
-    import os as _os
-    _host = _os.environ.get('TEXTCORD_HOST', '0.0.0.0')
-    _port = int(_os.environ.get('TEXTCORD_PORT', '5000'))
-    socketio.run(app, host=_host, port=_port, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5000)

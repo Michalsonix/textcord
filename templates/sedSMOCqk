@@ -745,33 +745,6 @@ function showBrowserNotification(data, isGroup) {
 }
 
 // ─── Unread counts ───
-function loadGroupUnreadCounts() {
-    fetch('/api/group-unread-counts')
-        .then(r => r.json())
-        .then(counts => {
-            unreadGroupCounts = counts;
-            updateGroupUnreadBadges();
-        });
-}
-
-function updateGroupUnreadBadges() {
-    document.querySelectorAll('.contact-item[data-group-id]').forEach(el => {
-        const gid = el.dataset.groupId;
-        const badge = el.querySelector('.unread-badge');
-        const count = unreadGroupCounts[gid] || 0;
-        if (badge) {
-            if (count > 0) {
-                badge.style.display = 'inline-flex';
-                badge.textContent = count > 99 ? '99+' : count;
-                el.classList.add('has-unread');
-            } else {
-                badge.style.display = 'none';
-                el.classList.remove('has-unread');
-            }
-        }
-    });
-}
-
 function loadUnreadCounts() {
     fetch('/api/unread-counts')
         .then(r => r.json())
@@ -828,8 +801,6 @@ function refreshContacts() {
 }
 
 loadUnreadCounts();
-    loadGroupUnreadCounts();
 setInterval(loadUnreadCounts, 10000);
-setInterval(loadGroupUnreadCounts, 10000);
 </script>
 {% endblock %}

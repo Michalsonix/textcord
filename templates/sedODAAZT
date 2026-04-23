@@ -828,8 +828,6 @@ function refreshContacts() {
 }
 
 loadUnreadCounts();
-    loadGroupUnreadCounts();
 setInterval(loadUnreadCounts, 10000);
-setInterval(loadGroupUnreadCounts, 10000);
 </script>
 {% endblock %}

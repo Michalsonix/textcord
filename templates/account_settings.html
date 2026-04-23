@@ -26,6 +26,18 @@
     </div>
 
     <div class="settings-section">
+        <h3>Session Limit</h3>
+        <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
+            Maximum simultaneous sessions (1-3). Current: {{ current_user.max_sessions }}
+        </p>
+        <div style="display:flex;gap:10px;">
+            <button class="btn {{ 'btn-success' if current_user.max_sessions == 1 else '' }}" onclick="setMaxSessions(1)">1</button>
+            <button class="btn {{ 'btn-success' if current_user.max_sessions == 2 else '' }}" onclick="setMaxSessions(2)">2</button>
+            <button class="btn {{ 'btn-success' if current_user.max_sessions == 3 else '' }}" onclick="setMaxSessions(3)">3</button>
+        </div>
+    </div>
+
+    <div class="settings-section">
         <h3>Recovery File</h3>
         <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
             Active recovery files: {{ recovery_count }}/3. Each can be used once.
@@ -81,6 +93,14 @@ function changePassword() {
 }
 function generateRecovery() {
     fetch('/api/account/generate-recovery', {method:'POST'}).then(r=>{if(!r.ok)return r.json().then(d=>{alert(d.error);throw new Error()});return r.blob()}).then(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='recovery.json';a.click();URL.revokeObjectURL(a.href)}).catch(()=>{});
+}
+function setMaxSessions(val) {
+    fetch('/api/account/set-max-sessions', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ max_sessions: val })
+    }).then(r => r.json()).then(data => {
+        if (data.ok) location.reload();
+    });
 }
 function panicLock() {
     document.getElementById('confirm-title').textContent = '🔒 PANIC LOCK';

@@ -39,6 +39,11 @@ The goal was to create a simple, fast, and controlled messaging environment.
 * Functional text communicator
 * Improved system reliability
 
+ ### prototype-2.0
+ * function of creating and managing group chats
+ * Fixed chat/group notifications
+ * Fixed account creation
+
 ---
 
 ## ⚙️ Tech concept

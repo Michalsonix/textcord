@@ -20,13 +20,14 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), default='user')  # user or admin
     is_banned = db.Column(db.Boolean, default=False)
     ban_reason = db.Column(db.Text, nullable=True)
-    ban_expires = db.Column(db.DateTime, nullable=True)  # None = permanent
+    ban_expires = db.Column(db.DateTime, nullable=True)
     is_deleted = db.Column(db.Boolean, default=False)
     is_panic_locked = db.Column(db.Boolean, default=False)
     must_change_password = db.Column(db.Boolean, default=False)
     last_active = db.Column(db.DateTime, default=datetime.utcnow)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     weekly_active_seconds = db.Column(db.Integer, default=0)
+    max_sessions = db.Column(db.Integer, default=1)
 
     sent_messages = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy='dynamic')
     received_messages = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver', lazy='dynamic')
@@ -89,10 +90,11 @@ class Message(db.Model):
     __tablename__ = 'messages'
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     sender_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
-    receiver_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    receiver_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
+    group_id = db.Column(db.String(36), db.ForeignKey('groups.id'), nullable=True)
     content = db.Column(db.Text, nullable=False)
     reply_to_id = db.Column(db.String(36), db.ForeignKey('messages.id'), nullable=True)
-    status = db.Column(db.String(20), default='sent')  # sending, sent, delivered, read, error
+    status = db.Column(db.String(20), default='sent')
     is_system = db.Column(db.Boolean, default=False)
     deleted_by_sender = db.Column(db.Boolean, default=False)
     deleted_by_receiver = db.Column(db.Boolean, default=False)
@@ -103,13 +105,52 @@ class Message(db.Model):
     reports = db.relationship('Report', backref='message', lazy='dynamic')
 
 
+class Group(db.Model):
+    __tablename__ = 'groups'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(200), nullable=False)
+    nickname = db.Column(db.String(200), nullable=True)
+    creator_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    creator = db.relationship('User', foreign_keys=[creator_id])
+    members = db.relationship('GroupMember', backref='group', lazy='dynamic', cascade='all, delete-orphan')
+
+    @property
+    def display_name(self):
+        return self.nickname or self.name
+
+
+class GroupMember(db.Model):
+    __tablename__ = 'group_members'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    group_id = db.Column(db.String(36), db.ForeignKey('groups.id'), nullable=False)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    role = db.Column(db.String(20), default='member')  # admin or member
+    nickname = db.Column(db.String(100), nullable=True)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
+class ActiveSession(db.Model):
+    __tablename__ = 'active_sessions'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    session_id = db.Column(db.String(200), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_active = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
 class Report(db.Model):
     __tablename__ = 'reports'
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     reporter_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
     reported_user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
     message_id = db.Column(db.String(36), db.ForeignKey('messages.id'), nullable=False)
-    status = db.Column(db.String(20), default='pending')  # pending, dismissed, warned, banned
+    status = db.Column(db.String(20), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     reporter = db.relationship('User', foreign_keys=[reporter_id])
@@ -187,3 +228,13 @@ def send_system_message(receiver_id, content):
     db.session.add(msg)
     db.session.commit()
     return msg
+
+
+class GroupMessageRead(db.Model):
+    __tablename__ = 'group_message_reads'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    group_id = db.Column(db.String(36), db.ForeignKey('groups.id'), nullable=False)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    last_read_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('group_id', 'user_id'),)

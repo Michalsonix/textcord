@@ -737,3 +737,33 @@ a:hover { text-decoration: underline; }
 .contact-item.has-unread .contact-name {
   color: var(--text-bright);
 }
+
+/* ─── SIDEBAR TABS ─── */
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 10px;
+  text-align: center;
+  background: var(--bg-secondary);
+  border: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.sidebar-tab:hover {
+  color: var(--text);
+  background: var(--bg-tertiary);
+}
+
+.sidebar-tab.active {
+  color: var(--text-bright);
+  border-bottom-color: var(--text-bright);
+}
