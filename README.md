@@ -44,7 +44,7 @@ The goal was to create a simple, fast, and controlled messaging environment.
  * Fixed chat/group notifications
  * Fixed account creation
 
- ### prototype-2.0
+ ### prototype-2.1
  * fixed installer bug
  * fixed ngnix config
 
