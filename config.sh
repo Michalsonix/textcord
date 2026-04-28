@@ -125,36 +125,44 @@ regenerate_cert() {
     show_header
     echo -e "${BOLD}  Regenerate SSL Certificate${NC}"
     echo ""
-    
+
     CERT_DIR="${INSTALL_DIR}/certs"
-    
-    # Read domain from existing config
+
     DOMAIN=""
     if [ -f /etc/dnsmasq.d/textcord.conf ]; then
         DOMAIN=$(grep "address=/" /etc/dnsmasq.d/textcord.conf | head -1 | cut -d/ -f2)
     fi
-    
+
     if [ -z "$DOMAIN" ]; then
         read -p "  Enter domain name: " DOMAIN
     else
         echo -e "  Domain: ${GREEN}${DOMAIN}${NC}"
     fi
-    
+
     BIND_IP=$(hostname -I | awk '{print $1}')
+    [ -z "$BIND_IP" ] && BIND_IP="127.0.0.1"
     echo -e "  Server IP: ${GREEN}${BIND_IP}${NC}"
     echo ""
-    
+    read -p "  Listening mode? [1=HTTPS only (HTTP redirects to HTTPS) / 2=HTTP and HTTPS side-by-side]: " HTTPS_MODE
+    USE_HSTS="no"
+    if [ "$HTTPS_MODE" = "1" ]; then
+        echo -e "${YELLOW}  [!] HSTS requires the CA certificate to be installed/trusted on the host machine!${NC}"
+        read -p "  Use HSTS protocol? [1=Yes / 2=No]: " HSTS_OPT
+        [ "$HSTS_OPT" = "1" ] && USE_HSTS="yes"
+    fi
+    echo ""
+
     mkdir -p "$CERT_DIR"
-    
+
     echo -e "${GREEN}[*] Generating new CA...${NC}"
     openssl genrsa -out "${CERT_DIR}/ca.key" 4096 2>/dev/null
     openssl req -new -x509 -days 3650 -key "${CERT_DIR}/ca.key" \
         -out "${CERT_DIR}/ca.crt" \
         -subj "/C=PL/ST=TextCord/L=TextCord/O=TextCord CA/CN=TextCord Root CA" 2>/dev/null
-    
+
     echo -e "${GREEN}[*] Generating server certificate...${NC}"
     openssl genrsa -out "${CERT_DIR}/server.key" 2048 2>/dev/null
-    
+
     cat > "${CERT_DIR}/san.cnf" << SANEOF
 [req]
 distinguished_name = req_distinguished_name
@@ -177,11 +185,11 @@ DNS.2 = *.${DOMAIN}
 IP.1 = ${BIND_IP}
 IP.2 = 127.0.0.1
 SANEOF
-    
+
     openssl req -new -key "${CERT_DIR}/server.key" \
         -out "${CERT_DIR}/server.csr" \
         -config "${CERT_DIR}/san.cnf" 2>/dev/null
-    
+
     openssl x509 -req -days 3650 \
         -in "${CERT_DIR}/server.csr" \
         -CA "${CERT_DIR}/ca.crt" \
@@ -190,21 +198,101 @@ SANEOF
         -out "${CERT_DIR}/server.crt" \
         -extensions v3_req \
         -extfile "${CERT_DIR}/san.cnf" 2>/dev/null
-    
+
+    if [ ! -s "${CERT_DIR}/server.crt" ] || [ ! -s "${CERT_DIR}/server.key" ]; then
+        echo -e "${RED}  Certificate generation failed. NGINX was not changed.${NC}"
+        echo ""
+        read -p "  Press Enter to continue..."
+        return
+    fi
+
     CLIENT_CERT_PATH="${HOME}/textcord_ca_${DOMAIN}.crt"
     cp "${CERT_DIR}/ca.crt" "${CLIENT_CERT_PATH}"
     chmod 644 "${CLIENT_CERT_PATH}"
-    
-    sudo nginx -t 2>/dev/null && sudo systemctl reload nginx 2>/dev/null
-    
-    echo ""
-    echo -e "${GREEN}  Certificate regenerated successfully!${NC}"
-    echo -e "  CA file: ${YELLOW}${CLIENT_CERT_PATH}${NC}"
-    echo -e "${YELLOW}  Import this file in your browser/OS as Trusted Root CA${NC}"
+
+    PORT=$(grep -oP 'TEXTCORD_PORT="\K[0-9]+' "${INSTALL_DIR}/start.sh" 2>/dev/null || echo "5000")
+
+    if [ "$HTTPS_MODE" = "1" ]; then
+        HTTP_BLOCK="server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    return 301 https://\$host\$request_uri;
+}"
+    else
+        HTTP_BLOCK="server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}"
+    fi
+
+    HSTS_LINE=""
+    if [ "$USE_HSTS" = "yes" ]; then
+        HSTS_LINE="    add_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;"
+    fi
+
+    sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
+${HTTP_BLOCK}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate "${CERT_DIR}/server.crt";
+    ssl_certificate_key "${CERT_DIR}/server.key";
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
+${HSTS_LINE}
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+NGINXEOF
+
+    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/textcord
+    sudo rm -f /etc/nginx/sites-enabled/default
+    if sudo nginx -t; then
+        sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx 2>/dev/null
+        echo ""
+        echo -e "${GREEN}  Certificate and NGINX configuration regenerated successfully!${NC}"
+        echo -e "  CA file: ${YELLOW}${CLIENT_CERT_PATH}${NC}"
+        echo -e "${YELLOW}  Import this file in your browser/OS as Trusted Root CA${NC}"
+    else
+        echo ""
+        echo -e "${RED}  NGINX configuration test failed. Check the output above before restarting NGINX.${NC}"
+    fi
+
     echo ""
     read -p "  Press Enter to continue..."
 }
-
 enable_service() {
     show_header
     echo -e "${BOLD}  Enable Autostart${NC}"

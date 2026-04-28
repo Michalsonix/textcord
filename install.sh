@@ -71,7 +71,8 @@ if [ "$USE_DNS" == "1" ]; then
         IFACE=$(ip -o link show | awk -F': ' "NR==$IFACE_CHOICE{print \$2}")
         BIND_IP=$(ip -4 addr show "$IFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
     fi
-    [ -z "$BIND_IP" ] && BIND_IP="0.0.0.0"
+    [ -z "$BIND_IP" ] && BIND_IP=$(hostname -I | awk '{print $1}')
+    [ -z "$BIND_IP" ] && BIND_IP="127.0.0.1"
     
     echo ""
     read -p "  Enable SSL encryption? [1=Yes (port 443) / 2=No (port 80)]: " USE_SSL_OPT
@@ -81,7 +82,7 @@ if [ "$USE_DNS" == "1" ]; then
     if [ "$USE_SSL_OPT" == "1" ]; then
         USE_SSL="yes"
         echo ""
-        read -p "  Listening mode? [1=HTTPS only (block HTTP) / 2=Both HTTP and HTTPS (redirect HTTP->HTTPS)]: " HTTPS_MODE
+        read -p "  Listening mode? [1=HTTPS only (HTTP redirects to HTTPS) / 2=HTTP and HTTPS side-by-side]: " HTTPS_MODE
         if [ "$HTTPS_MODE" == "1" ]; then
             HTTPS_ONLY="yes"
             echo ""
@@ -93,7 +94,8 @@ if [ "$USE_DNS" == "1" ]; then
         fi
     fi
 else
-    BIND_IP="0.0.0.0"
+    BIND_IP=$(hostname -I | awk '{print $1}')
+    [ -z "$BIND_IP" ] && BIND_IP="127.0.0.1"
 fi
 
 # Create initialization script
@@ -131,24 +133,64 @@ rm -f init_db.py
 # Generate secret key
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
-# Create start.sh
+# Create start.sh and networking configuration helpers
+configure_dnsmasq() {
+    echo -e "${GREEN}[*] Configuring DNS (dnsmasq)...${NC}"
+    if [ -z "$BIND_IP" ] || [ "$BIND_IP" = "0.0.0.0" ]; then
+        BIND_IP=$(hostname -I | awk '{print $1}')
+    fi
+    [ -z "$BIND_IP" ] && BIND_IP="127.0.0.1"
+
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        echo -e "${YELLOW}[*] Stopping systemd-resolved to free port 53...${NC}"
+        sudo systemctl stop systemd-resolved
+        sudo systemctl disable systemd-resolved
+        sudo rm -f /etc/resolv.conf
+        echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+        echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf > /dev/null
+    fi
+
+    sudo tee /etc/dnsmasq.d/textcord.conf > /dev/null << DNSEOF
+# TextCord local DNS
+address=/${DOMAIN}/${BIND_IP}
+listen-address=0.0.0.0
+bind-interfaces
+server=8.8.8.8
+server=8.8.4.4
+DNSEOF
+
+    sudo systemctl restart dnsmasq
+    sudo systemctl enable dnsmasq
+    echo -e "${GREEN}[*] DNS configured: ${DOMAIN} -> ${BIND_IP}${NC}"
+    echo -e "${YELLOW}[!] Set your client DNS server to ${BIND_IP} for name resolution${NC}"
+}
+
+apply_nginx_or_exit() {
+    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/textcord
+    sudo rm -f /etc/nginx/sites-enabled/default
+    if sudo nginx -t; then
+        sudo systemctl restart nginx
+    else
+        echo -e "${RED}[!] NGINX configuration test failed. Installation stopped before starting the broken proxy.${NC}"
+        exit 1
+    fi
+}
+
 if [ "$USE_SSL" == "yes" ] && [ -n "$DOMAIN" ]; then
     echo -e "${GREEN}[*] Configuring NGINX with SSL (self-signed)...${NC}"
-    
-    # ─── Generate self-signed CA and server certificate ───
+
     CERT_DIR="${INSTALL_DIR}/certs"
     mkdir -p "$CERT_DIR"
-    
+
     echo -e "${GREEN}[*] Generating CA certificate...${NC}"
     openssl genrsa -out "${CERT_DIR}/ca.key" 4096 2>/dev/null
     openssl req -new -x509 -days 3650 -key "${CERT_DIR}/ca.key" \
         -out "${CERT_DIR}/ca.crt" \
         -subj "/C=PL/ST=TextCord/L=TextCord/O=TextCord CA/CN=TextCord Root CA" 2>/dev/null
-    
+
     echo -e "${GREEN}[*] Generating server certificate for ${DOMAIN}...${NC}"
     openssl genrsa -out "${CERT_DIR}/server.key" 2048 2>/dev/null
-    
-    # Create SAN config for the domain + IP
+
     cat > "${CERT_DIR}/san.cnf" << SANEOF
 [req]
 distinguished_name = req_distinguished_name
@@ -171,11 +213,11 @@ DNS.2 = *.${DOMAIN}
 IP.1 = ${BIND_IP}
 IP.2 = 127.0.0.1
 SANEOF
-    
+
     openssl req -new -key "${CERT_DIR}/server.key" \
         -out "${CERT_DIR}/server.csr" \
         -config "${CERT_DIR}/san.cnf" 2>/dev/null
-    
+
     openssl x509 -req -days 3650 \
         -in "${CERT_DIR}/server.csr" \
         -CA "${CERT_DIR}/ca.crt" \
@@ -184,117 +226,86 @@ SANEOF
         -out "${CERT_DIR}/server.crt" \
         -extensions v3_req \
         -extfile "${CERT_DIR}/san.cnf" 2>/dev/null
-    
-    # Copy CA cert to user home directory for client import
+
+    if [ ! -s "${CERT_DIR}/server.crt" ] || [ ! -s "${CERT_DIR}/server.key" ]; then
+        echo -e "${RED}[!] Certificate generation failed. NGINX was not configured.${NC}"
+        exit 1
+    fi
+
     CLIENT_CERT_PATH="${HOME}/textcord_ca_${DOMAIN}.crt"
     cp "${CERT_DIR}/ca.crt" "${CLIENT_CERT_PATH}"
     chmod 644 "${CLIENT_CERT_PATH}"
     echo -e "${GREEN}[*] Client CA certificate saved to: ${CLIENT_CERT_PATH}${NC}"
     echo -e "${YELLOW}[!] Import this certificate as Trusted Root CA in your browser/OS${NC}"
-    
-    # Build HTTP block depending on HTTPS_ONLY mode
+
     if [ "$HTTPS_ONLY" == "yes" ]; then
         HTTP_BLOCK="server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    # HTTPS-only mode: refuse all plain HTTP requests
-    return 444;
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    return 301 https://\$host\$request_uri;
 }"
     else
         HTTP_BLOCK="server {
     listen 80;
+    listen [::]:80;
     server_name ${DOMAIN};
-    return 301 https://\\\$server_name\\\$request_uri;
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
 }"
     fi
 
-    # HSTS header (only when HTTPS-only enabled and user opted in)
     HSTS_LINE=""
     if [ "$USE_HSTS" == "yes" ]; then
         HSTS_LINE="    add_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;"
     fi
 
-    # Catch-all 443 block (HTTPS-only) — drops connections to IP or wrong SNI
-    HTTPS_CATCHALL=""
-    if [ "$HTTPS_ONLY" == "yes" ]; then
-        HTTPS_CATCHALL="server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name _;
-    ssl_certificate ${CERT_DIR}/server.crt;
-    ssl_certificate_key ${CERT_DIR}/server.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    return 444;
-}"
-    fi
-
     sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
 ${HTTP_BLOCK}
 
-${HTTPS_CATCHALL}
-
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name ${DOMAIN};
 
-    ssl_certificate ${CERT_DIR}/server.crt;
-    ssl_certificate_key ${CERT_DIR}/server.key;
+    ssl_certificate "${CERT_DIR}/server.crt";
+    ssl_certificate_key "${CERT_DIR}/server.key";
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
 ${HSTS_LINE}
-
-    # Block requests with non-matching Host header (e.g. accessed via IP)
-    if (\\\$host != "${DOMAIN}") {
-        return 444;
-    }
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \\\$http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \\\$host;
-        proxy_set_header X-Real-IP \\\$remote_addr;
-        proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \\\$scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
     }
 }
 NGINXEOF
 
-    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/
-    sudo rm -f /etc/nginx/sites-enabled/default
-    sudo nginx -t && sudo systemctl restart nginx
-    
-    # ─── Configure dnsmasq for local DNS resolution ───
-    echo -e "${GREEN}[*] Configuring DNS (dnsmasq)...${NC}"
-    [ -z "$BIND_IP" ] && BIND_IP=$(hostname -I | awk '{print $1}')
-    
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        echo -e "${YELLOW}[*] Stopping systemd-resolved to free port 53...${NC}"
-        sudo systemctl stop systemd-resolved
-        sudo systemctl disable systemd-resolved
-        sudo rm -f /etc/resolv.conf
-        echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
-        echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf > /dev/null
-    fi
-    
-    sudo tee /etc/dnsmasq.d/textcord.conf > /dev/null << DNSEOF
-# TextCord local DNS
-address=/${DOMAIN}/${BIND_IP}
-listen-address=0.0.0.0
-bind-interfaces
-server=8.8.8.8
-server=8.8.4.4
-DNSEOF
-    
-    sudo systemctl restart dnsmasq
-    sudo systemctl enable dnsmasq
-    echo -e "${GREEN}[*] DNS configured: ${DOMAIN} -> ${BIND_IP}${NC}"
-    echo -e "${YELLOW}[!] Set your client DNS server to ${BIND_IP} for name resolution${NC}"
-    
+    apply_nginx_or_exit
+    configure_dnsmasq
+
     cat > "${INSTALL_DIR}/start.sh" << STARTEOF
 #!/bin/bash
 cd "${INSTALL_DIR}"
@@ -302,63 +313,43 @@ source venv/bin/activate
 export SECRET_KEY="${SECRET_KEY}"
 export TEXTCORD_HOST="127.0.0.1"
 export TEXTCORD_PORT="${PORT}"
-echo "TextCord running at https://${DOMAIN}"
+if [ "${HTTPS_ONLY}" = "yes" ]; then
+    echo "TextCord running at https://${DOMAIN}"
+else
+    echo "TextCord running at http://${DOMAIN} and https://${DOMAIN}"
+fi
 echo "Press Ctrl+C to stop."
 python3 app.py
 STARTEOF
 
 elif [ -n "$DOMAIN" ]; then
     echo -e "${GREEN}[*] Configuring NGINX without SSL...${NC}"
-    
+
     sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
 server {
     listen 80;
+    listen [::]:80;
     server_name ${DOMAIN};
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \\\$http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \\\$host;
-        proxy_set_header X-Real-IP \\\$remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
     }
 }
 NGINXEOF
 
-    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/
-    sudo rm -f /etc/nginx/sites-enabled/default
-    sudo nginx -t && sudo systemctl restart nginx
-    
-    # ─── Configure dnsmasq for local DNS resolution ───
-    echo -e "${GREEN}[*] Configuring DNS (dnsmasq)...${NC}"
-    [ -z "$BIND_IP" ] && BIND_IP=$(hostname -I | awk '{print $1}')
-    
-    # Stop systemd-resolved if it conflicts on port 53
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        echo -e "${YELLOW}[*] Stopping systemd-resolved to free port 53...${NC}"
-        sudo systemctl stop systemd-resolved
-        sudo systemctl disable systemd-resolved
-        # Fix /etc/resolv.conf
-        sudo rm -f /etc/resolv.conf
-        echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
-        echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf > /dev/null
-    fi
-    
-    sudo tee /etc/dnsmasq.d/textcord.conf > /dev/null << DNSEOF
-# TextCord local DNS
-address=/${DOMAIN}/${BIND_IP}
-listen-address=0.0.0.0
-bind-interfaces
-server=8.8.8.8
-server=8.8.4.4
-DNSEOF
-    
-    sudo systemctl restart dnsmasq
-    sudo systemctl enable dnsmasq
-    echo -e "${GREEN}[*] DNS configured: ${DOMAIN} -> ${BIND_IP}${NC}"
-    echo -e "${YELLOW}[!] Set your client DNS server to ${BIND_IP} for name resolution${NC}"
-    
+    apply_nginx_or_exit
+    configure_dnsmasq
+
     cat > "${INSTALL_DIR}/start.sh" << STARTEOF
 #!/bin/bash
 cd "${INSTALL_DIR}"
@@ -372,11 +363,19 @@ python3 app.py
 STARTEOF
 
 else
+    echo -e "${GREEN}[*] Direct mode selected. Removing old TextCord NGINX proxy if it exists...${NC}"
+    sudo rm -f /etc/nginx/sites-enabled/textcord /etc/nginx/sites-available/textcord
+    if command -v nginx >/dev/null 2>&1 && sudo nginx -t; then
+        sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx 2>/dev/null || true
+    fi
+
     cat > "${INSTALL_DIR}/start.sh" << STARTEOF
 #!/bin/bash
 cd "${INSTALL_DIR}"
 source venv/bin/activate
 export SECRET_KEY="${SECRET_KEY}"
+export TEXTCORD_HOST="0.0.0.0"
+export TEXTCORD_PORT="${PORT}"
 echo "TextCord running at http://${BIND_IP}:${PORT}"
 echo "Press Ctrl+C to stop."
 python3 app.py
@@ -393,7 +392,13 @@ echo ""
 echo -e "  Start the service:  ${YELLOW}./start.sh${NC}"
 if [ -n "$DOMAIN" ]; then
     if [ "$USE_SSL" == "yes" ]; then
-        echo -e "  Access:  ${YELLOW}https://${DOMAIN}${NC}"
+        if [ "$HTTPS_ONLY" == "yes" ]; then
+            echo -e "  Access:  ${YELLOW}https://${DOMAIN}${NC}"
+            echo -e "  HTTP:    ${YELLOW}redirects to HTTPS${NC}"
+        else
+            echo -e "  Access:  ${YELLOW}http://${DOMAIN}${NC}"
+            echo -e "  Access:  ${YELLOW}https://${DOMAIN}${NC}"
+        fi
         echo -e "  CA Certificate:  ${YELLOW}${HOME}/textcord_ca_${DOMAIN}.crt${NC}"
         echo -e "  ${YELLOW}[!] Import the CA certificate into your browser/OS as Trusted Root CA${NC}"
     else
