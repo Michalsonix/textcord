@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login-page">
+    <div class="login-box">
+        <h1>Password Recovery</h1>
+        {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+        {% if success %}<div class="success-msg">{{ success }}</div>{% endif %}
+        <form method="POST" enctype="multipart/form-data">
+            <div class="form-row">
+                <label>Recovery File</label>
+                <input type="file" name="recovery_file" accept=".json" required>
+            </div>
+            <button type="submit" class="btn btn-full" style="margin-top: 10px;">Recover Account</button>
+        </form>
+        <div class="login-links">
+            <a href="/login">Back to login</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
