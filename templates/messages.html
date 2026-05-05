@@ -61,6 +61,10 @@
             <div class="chat-header">
                 <span class="chat-header-name" id="chat-header-name"></span>
                 <div class="chat-header-actions">
+                    <button class="btn call-btn hidden" id="call-btn" onclick="onCallButtonClick()" title="Call user" style="position:relative;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                        <span id="incoming-call-indicator" class="incoming-call-indicator hidden" title="Incoming call"></span>
+                    </button>
                     <button class="btn" onclick="openChatSettings()" title="Chat Settings">⚙</button>
                 </div>
             </div>
@@ -85,6 +89,7 @@
         <button class="btn btn-full btn-danger" style="margin-bottom:10px;" onclick="deleteChatHistory()">Delete Chat History (yours only)</button>
         <button class="btn btn-full" style="margin-bottom:10px;" id="block-btn" onclick="toggleBlock()">Block User</button>
         <button class="btn btn-full" style="margin-bottom:10px;" id="mute-btn" onclick="toggleMute()">Mute User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-calls-btn" onclick="toggleMuteCalls()">Mute Calls</button>
         <button class="btn btn-full" style="margin-bottom:10px;" onclick="openRenameModal()">Rename User</button>
         <button class="btn btn-full" style="margin-bottom:10px;" onclick="openSearchModal()">Search in Conversation</button>
         <button class="btn btn-full" style="margin-bottom:10px;" onclick="openCreateGroupFromChat()">Create Group</button>
@@ -145,9 +150,47 @@
 
 <!-- Message Action Menu -->
 <div class="message-menu hidden" id="msg-action-menu" style="position:fixed;z-index:200;"></div>
+
+<!-- Incoming Call Modal -->
+<div class="modal-overlay hidden" id="incoming-call-modal" style="z-index:1000;">
+    <div class="modal" style="text-align:center;max-width:400px;">
+        <h2 style="margin-bottom:8px;">Dzwoni do ciebie:</h2>
+        <div id="incoming-caller-name" style="font-size:18px;margin-bottom:20px;color:var(--text);"></div>
+        <div style="display:flex;justify-content:center;gap:30px;">
+            <button class="call-circle-btn accept" onclick="acceptIncomingCall()" title="Accept">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+            <button class="call-circle-btn decline" onclick="declineIncomingCall()" title="Decline">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg);"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Active Call Window -->
+<div class="modal-overlay hidden" id="call-window" style="z-index:999;">
+    <div class="call-modal">
+        <button class="modal-close" onclick="hideCallWindow()" title="Hide window">_</button>
+        <pre class="call-timer" id="call-timer-ascii"></pre>
+        <pre class="call-name" id="call-name-ascii"></pre>
+        <div class="call-nickname" id="call-nickname"></div>
+        <div class="call-status" id="call-status">Calling...</div>
+        <div class="call-controls">
+            <button class="call-circle-btn mic-btn" id="mic-btn" onclick="toggleCallMic()" title="Toggle microphone">
+                <svg id="mic-icon-on" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                <svg id="mic-icon-off" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <button class="call-circle-btn decline" onclick="endCall()" title="Hang up">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg);"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+<audio id="remote-audio" autoplay></audio>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://unpkg.com/figlet@1.7.0/lib/figlet.js"></script>
 <script>
 const currentUserId = "{{ current_user.id }}";
 let currentContactId = null;
@@ -831,5 +874,469 @@ loadUnreadCounts();
     loadGroupUnreadCounts();
 setInterval(loadUnreadCounts, 10000);
 setInterval(loadGroupUnreadCounts, 10000);
+
+// ═══════════════════════════════════════════════════════════════
+// CALL FEATURE (WebRTC + SocketIO signaling)
+// ═══════════════════════════════════════════════════════════════
+
+const IS_SECURE = window.isSecureContext || location.protocol === 'https:';
+let callPeer = null;
+let callLocalStream = null;
+let callRemoteStream = null;
+let callPartnerId = null;
+let callPartnerName = '';
+let callPartnerNick = '';
+let callState = 'idle'; // idle | calling | ringing | connected | reconnecting
+let callStartTs = null;
+let callTimerInterval = null;
+let callMicEnabled = true;
+let incomingCall = null;
+let ringtoneCtx = null;
+let ringtoneNodes = null;
+let pendingCandidates = [];
+let reconnectTimer = null;
+let networkWarnTimer = null;
+let pendingIncomingForContact = {}; // contact_id -> true
+let figletReady = false;
+let callWindowRef = null;
+const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+// Load figlet "Big" font (matches the ASCII alphabet provided)
+if (typeof figlet !== 'undefined') {
+    figlet.defaults({ fontPath: 'https://unpkg.com/figlet@1.7.0/fonts' });
+    figlet.preloadFonts(["Big"], () => { figletReady = true; });
+}
+
+function asciiText(text) {
+    if (figletReady && typeof figlet !== 'undefined') {
+        try { return figlet.textSync(text, { font: 'Big' }); } catch(e) {}
+    }
+    return text;
+}
+
+// ─── Ringtone via Web Audio (no copyright, no file needed) ───
+function startRingtone() {
+    stopRingtone();
+    try {
+        ringtoneCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = ringtoneCtx;
+        ringtoneNodes = { stopped: false };
+        function beep() {
+            if (!ringtoneNodes || ringtoneNodes.stopped) return;
+            const t0 = ctx.currentTime;
+            [440, 480].forEach(freq => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.frequency.value = freq;
+                osc.type = 'sine';
+                gain.gain.setValueAtTime(0, t0);
+                gain.gain.linearRampToValueAtTime(0.15, t0 + 0.05);
+                gain.gain.setValueAtTime(0.15, t0 + 1.8);
+                gain.gain.linearRampToValueAtTime(0, t0 + 2.0);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(t0);
+                osc.stop(t0 + 2.0);
+            });
+            setTimeout(beep, 4000);
+        }
+        beep();
+    } catch(e) { console.warn('ringtone failed', e); }
+}
+function stopRingtone() {
+    if (ringtoneNodes) ringtoneNodes.stopped = true;
+    if (ringtoneCtx) { try { ringtoneCtx.close(); } catch(e) {} ringtoneCtx = null; }
+    ringtoneNodes = null;
+}
+
+// ─── Show/hide call button when DM contact selected ───
+const _origSelectContact = selectContact;
+selectContact = function(userId) {
+    _origSelectContact(userId);
+    const callBtn = document.getElementById('call-btn');
+    const contact = document.querySelector(`[data-user-id="${userId}"]`);
+    const isSystem = contact && contact.dataset.isSystem === 'true';
+    if (callBtn) {
+        if (isSystem) callBtn.classList.add('hidden');
+        else callBtn.classList.remove('hidden');
+    }
+    // Indicator if pending incoming call from this user
+    updateIncomingIndicator();
+};
+const _origSelectGroup = selectGroup;
+selectGroup = function(gid) {
+    _origSelectGroup(gid);
+    document.getElementById('call-btn')?.classList.add('hidden');
+};
+
+function updateIncomingIndicator() {
+    const ind = document.getElementById('incoming-call-indicator');
+    if (!ind) return;
+    if (currentContactId && pendingIncomingForContact[currentContactId]) {
+        ind.classList.remove('hidden');
+    } else {
+        ind.classList.add('hidden');
+    }
+}
+
+// ─── Click on phone icon ───
+function onCallButtonClick() {
+    if (!currentContactId) return;
+    // If there's an incoming call from this contact, accept it
+    if (incomingCall && incomingCall.from_id === currentContactId) {
+        acceptIncomingCall();
+        return;
+    }
+    if (pendingIncomingForContact[currentContactId]) {
+        // Show modal again
+        showIncomingModal(pendingIncomingForContact[currentContactId]);
+        return;
+    }
+    // HTTP cannot initiate
+    if (!IS_SECURE) {
+        alert('Calls can only be initiated over HTTPS (secure connection).');
+        return;
+    }
+    if (callState !== 'idle') {
+        showCallWindow();
+        return;
+    }
+    startOutgoingCall(currentContactId);
+}
+
+// ─── Outgoing call ───
+async function startOutgoingCall(targetId) {
+    callPartnerId = targetId;
+    const el = document.querySelector(`[data-user-id="${targetId}"]`);
+    callPartnerName = el ? el.querySelector('.contact-name').textContent : 'User';
+    callPartnerNick = el?.querySelector('.contact-nick')?.textContent || '';
+    callState = 'calling';
+    showCallWindow();
+    setCallStatus('Calling...');
+    try {
+        await ensureLocalStream();
+        createPeer();
+        const offer = await callPeer.createOffer();
+        await callPeer.setLocalDescription(offer);
+        socket.emit('call_invite', { target_id: targetId, secure: true });
+        // Wait for accept before sending offer
+        callPendingOffer = offer;
+    } catch (e) {
+        console.error(e);
+        setCallStatus('Microphone unavailable');
+        endCall();
+    }
+}
+let callPendingOffer = null;
+
+async function ensureLocalStream() {
+    if (callLocalStream) return;
+    if (!IS_SECURE) {
+        // HTTP: receive-only, no microphone allowed
+        callLocalStream = null;
+        callMicEnabled = false;
+        return;
+    }
+    callLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    callMicEnabled = true;
+}
+
+function createPeer() {
+    callPeer = new RTCPeerConnection(RTC_CONFIG);
+    if (callLocalStream) {
+        callLocalStream.getTracks().forEach(t => callPeer.addTrack(t, callLocalStream));
+    }
+    callPeer.ontrack = (e) => {
+        callRemoteStream = e.streams[0];
+        document.getElementById('remote-audio').srcObject = callRemoteStream;
+    };
+    callPeer.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('call_signal', { target_id: callPartnerId, payload: { type: 'ice', candidate: e.candidate } });
+    };
+    callPeer.onconnectionstatechange = () => {
+        const st = callPeer.connectionState;
+        if (st === 'connected') {
+            markCallConnected();
+            if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+            if (networkWarnTimer) { clearTimeout(networkWarnTimer); networkWarnTimer = null; }
+        } else if (st === 'disconnected') {
+            networkWarnTimer = setTimeout(() => setCallStatus('Connection issues...'), 1500);
+            startReconnectCountdown();
+        } else if (st === 'failed' || st === 'closed') {
+            if (callState === 'connected') {
+                setCallStatus('No connection');
+                startReconnectCountdown();
+            }
+        }
+    };
+}
+
+let reconnectSecondsLeft = 60;
+function startReconnectCountdown() {
+    if (reconnectTimer) return;
+    reconnectSecondsLeft = 60;
+    reconnectTimer = setInterval(() => {
+        reconnectSecondsLeft--;
+        if (callState === 'connected' && callPeer && callPeer.connectionState === 'connected') {
+            clearInterval(reconnectTimer); reconnectTimer = null; return;
+        }
+        setCallStatus(`No connection. Returning in ${reconnectSecondsLeft}s...`);
+        if (reconnectSecondsLeft <= 0) {
+            clearInterval(reconnectTimer); reconnectTimer = null;
+            endCall();
+        }
+    }, 1000);
+}
+
+// ─── Incoming call ───
+socket.on('call_incoming', async (data) => {
+    // Check call mute
+    try {
+        const r = await fetch('/api/chat/call-status?contact_id=' + encodeURIComponent(data.from_id));
+        const j = await r.json();
+        if (j.call_muted) {
+            // mark indicator only
+            pendingIncomingForContact[data.from_id] = data;
+            updateIncomingIndicator();
+            return;
+        }
+    } catch(e) {}
+    pendingIncomingForContact[data.from_id] = data;
+    updateIncomingIndicator();
+    showIncomingModal(data);
+});
+
+function showIncomingModal(data) {
+    incomingCall = data;
+    document.getElementById('incoming-caller-name').textContent =
+        data.from_name + (data.from_nickname ? ' (' + data.from_nickname + ')' : '');
+    document.getElementById('incoming-call-modal').classList.remove('hidden');
+    startRingtone();
+    // Browser notification
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+        const n = new Notification('Incoming call', {
+            body: data.from_name + ' is calling you',
+            tag: 'call-' + data.from_id, requireInteraction: true,
+        });
+        n.onclick = () => { window.focus(); n.close(); };
+    }
+}
+
+async function acceptIncomingCall() {
+    if (!incomingCall) return;
+    stopRingtone();
+    document.getElementById('incoming-call-modal').classList.add('hidden');
+    callPartnerId = incomingCall.from_id;
+    callPartnerName = incomingCall.from_name;
+    callPartnerNick = incomingCall.from_nickname || '';
+    delete pendingIncomingForContact[callPartnerId];
+    updateIncomingIndicator();
+    callState = 'connected';
+    showCallWindow();
+    setCallStatus('Connecting...');
+    try {
+        await ensureLocalStream();
+        createPeer();
+        if (!IS_SECURE) setCallStatus('Microphone disabled on HTTP. You can listen only.');
+        socket.emit('call_accept', { target_id: callPartnerId });
+        incomingCall = null;
+    } catch(e) {
+        console.error(e);
+        endCall();
+    }
+}
+
+function declineIncomingCall() {
+    if (!incomingCall) return;
+    stopRingtone();
+    socket.emit('call_decline', { target_id: incomingCall.from_id });
+    delete pendingIncomingForContact[incomingCall.from_id];
+    updateIncomingIndicator();
+    incomingCall = null;
+    document.getElementById('incoming-call-modal').classList.add('hidden');
+}
+
+socket.on('call_accepted', async (data) => {
+    if (callState !== 'calling' || data.from_id !== callPartnerId) return;
+    markCallConnected();
+    // Send offer
+    if (callPendingOffer) {
+        socket.emit('call_signal', { target_id: callPartnerId, payload: { type: 'offer', sdp: callPendingOffer } });
+        callPendingOffer = null;
+    }
+});
+
+socket.on('call_declined', (data) => {
+    if (data.from_id !== callPartnerId) return;
+    setCallStatus('Call declined');
+    fetch('/api/call/log', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ contact_id: callPartnerId, kind: 'declined', duration: 0 }) });
+    setTimeout(endCall, 1200);
+});
+
+socket.on('call_cancelled', (data) => {
+    if (incomingCall && incomingCall.from_id === data.from_id) {
+        stopRingtone();
+        document.getElementById('incoming-call-modal').classList.add('hidden');
+        delete pendingIncomingForContact[data.from_id];
+        updateIncomingIndicator();
+        incomingCall = null;
+    }
+});
+
+socket.on('call_ended', (data) => {
+    if (data.from_id === callPartnerId) {
+        endCall(true);
+    }
+});
+
+socket.on('call_failed', (data) => {
+    alert(data.reason || 'Call failed');
+    endCall();
+});
+
+socket.on('call_signal', async (data) => {
+    if (data.from_id !== callPartnerId) return;
+    const p = data.payload;
+    if (!callPeer) return;
+    try {
+        if (p.type === 'offer') {
+            await callPeer.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            const answer = await callPeer.createAnswer();
+            await callPeer.setLocalDescription(answer);
+            socket.emit('call_signal', { target_id: callPartnerId, payload: { type: 'answer', sdp: answer } });
+        } else if (p.type === 'answer') {
+            await callPeer.setRemoteDescription(new RTCSessionDescription(p.sdp));
+        } else if (p.type === 'ice') {
+            await callPeer.addIceCandidate(new RTCIceCandidate(p.candidate));
+        }
+    } catch(e) { console.error('signal err', e); }
+});
+
+// ─── Call window UI ───
+function renderCallPopup() {
+    if (!callWindowRef || callWindowRef.closed) return;
+    callWindowRef.document.open();
+    callWindowRef.document.write(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>TextCord Call</title><link rel="stylesheet" href="/static/css/style.css"></head><body class="call-popup-body"><div class="call-modal call-popup-modal"><pre class="call-timer" id="popup-call-timer-ascii"></pre><pre class="call-name" id="popup-call-name-ascii"></pre><div class="call-nickname" id="popup-call-nickname"></div><div class="call-status" id="popup-call-status"></div><div class="call-controls"><button class="call-circle-btn mic-btn" onclick="window.opener.toggleCallMic()" title="Toggle microphone"><svg id="popup-mic-icon-on" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg id="popup-mic-icon-off" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="call-circle-btn decline" onclick="window.opener.endCall()" title="Hang up"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg);"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button></div></div></body></html>`);
+    callWindowRef.document.close();
+}
+
+function showCallWindow() {
+    if (!callWindowRef || callWindowRef.closed) {
+        callWindowRef = window.open('', 'textcord-call', 'width=760,height=560,resizable=yes,scrollbars=no');
+        if (callWindowRef) renderCallPopup();
+    }
+    if (callWindowRef && !callWindowRef.closed) callWindowRef.focus();
+    const w = document.getElementById('call-window');
+    if (!callWindowRef) w.classList.remove('hidden');
+    document.getElementById('call-name-ascii').textContent = asciiText(callPartnerName);
+    document.getElementById('call-nickname').textContent = callPartnerNick;
+    if (callWindowRef && !callWindowRef.closed) {
+        callWindowRef.document.getElementById('popup-call-name-ascii').textContent = asciiText(callPartnerName);
+        callWindowRef.document.getElementById('popup-call-nickname').textContent = callPartnerNick;
+    }
+    updateCallTimerDisplay(0);
+    updateMicIcon();
+}
+function hideCallWindow() {
+    document.getElementById('call-window').classList.add('hidden');
+    if (callWindowRef && !callWindowRef.closed) callWindowRef.close();
+}
+function setCallStatus(s) {
+    document.getElementById('call-status').textContent = s;
+    if (callWindowRef && !callWindowRef.closed) callWindowRef.document.getElementById('popup-call-status').textContent = s;
+}
+
+function markCallConnected() {
+    callState = 'connected';
+    callStartTs = callStartTs || Date.now();
+    startCallTimer();
+    setCallStatus(IS_SECURE ? '' : 'Microphone disabled on HTTP. You can listen only.');
+}
+
+function startCallTimer() {
+    if (callTimerInterval) clearInterval(callTimerInterval);
+    callTimerInterval = setInterval(() => {
+        const sec = Math.floor((Date.now() - callStartTs) / 1000);
+        updateCallTimerDisplay(sec);
+    }, 1000);
+}
+function updateCallTimerDisplay(sec) {
+    const h = String(Math.floor(sec/3600)).padStart(2,'0');
+    const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
+    const s = String(sec%60).padStart(2,'0');
+    const txt = asciiText(`${h}:${m}:${s}`);
+    document.getElementById('call-timer-ascii').textContent = txt;
+    if (callWindowRef && !callWindowRef.closed) callWindowRef.document.getElementById('popup-call-timer-ascii').textContent = txt;
+}
+
+function toggleCallMic() {
+    if (!callLocalStream) {
+        if (!IS_SECURE) { alert('Microphone disabled on HTTP. Switch to HTTPS to talk.'); return; }
+        return;
+    }
+    callMicEnabled = !callMicEnabled;
+    callLocalStream.getAudioTracks().forEach(t => t.enabled = callMicEnabled);
+    updateMicIcon();
+}
+function updateMicIcon() {
+    document.getElementById('mic-icon-on').style.display = callMicEnabled ? '' : 'none';
+    document.getElementById('mic-icon-off').style.display = callMicEnabled ? 'none' : '';
+    if (callWindowRef && !callWindowRef.closed) {
+        callWindowRef.document.getElementById('popup-mic-icon-on').style.display = callMicEnabled ? '' : 'none';
+        callWindowRef.document.getElementById('popup-mic-icon-off').style.display = callMicEnabled ? 'none' : '';
+    }
+}
+
+function endCall(remote) {
+    const wasConnected = callState === 'connected';
+    const duration = callStartTs ? Math.floor((Date.now() - callStartTs) / 1000) : 0;
+    if (!remote) {
+        if (callPartnerId) socket.emit('call_end', { target_id: callPartnerId });
+        if (callState === 'calling' && callPartnerId) {
+            socket.emit('call_cancel', { target_id: callPartnerId });
+            fetch('/api/call/log', { method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ contact_id: callPartnerId, kind: 'missed', duration: 0 }) });
+        } else if (wasConnected && duration > 0) {
+            fetch('/api/call/log', { method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ contact_id: callPartnerId, kind: 'ended', duration }) });
+        }
+    }
+    if (callPeer) { try { callPeer.close(); } catch(e){} callPeer = null; }
+    if (callLocalStream) { callLocalStream.getTracks().forEach(t => t.stop()); callLocalStream = null; }
+    if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
+    if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+    if (callWindowRef && !callWindowRef.closed) callWindowRef.close();
+    callState = 'idle';
+    callStartTs = null;
+    callPartnerId = null;
+    callPendingOffer = null;
+    document.getElementById('call-window').classList.add('hidden');
+    document.getElementById('remote-audio').srcObject = null;
+    if (chatMode === 'dm' && currentContactId) loadMessages();
+}
+
+// ─── Mute calls toggle (in chat settings) ───
+async function toggleMuteCalls() {
+    const btn = document.getElementById('mute-calls-btn');
+    const action = btn.textContent.includes('Unmute') ? 'unmute-calls' : 'mute-calls';
+    await fetch(`/api/chat/${action}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ contact_id: currentContactId })
+    });
+    btn.textContent = action === 'mute-calls' ? 'Unmute Calls' : 'Mute Calls';
+    closeChatSettings();
+}
+
+// Refresh mute-calls state when opening settings
+const _origOpenChatSettings = openChatSettings;
+openChatSettings = function() {
+    if (chatMode === 'dm' && currentContactId) {
+        fetch('/api/chat/call-status?contact_id=' + encodeURIComponent(currentContactId))
+            .then(r => r.json()).then(j => {
+                document.getElementById('mute-calls-btn').textContent = j.call_muted ? 'Unmute Calls' : 'Mute Calls';
+            });
+    }
+    _origOpenChatSettings();
+};
 </script>
 {% endblock %}

@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_file, flash, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead
+from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead, MutedCall
 from datetime import datetime, timedelta
 import uuid
 import os
@@ -816,6 +816,74 @@ def unmute_user():
         db.session.commit()
     return jsonify({'ok': True})
 
+@app.route('/api/chat/mute-calls', methods=['POST'])
+@login_required
+def mute_calls():
+    contact_id = request.json.get('contact_id')
+    if not MutedCall.query.filter_by(muter_id=current_user.id, muted_id=contact_id).first():
+        db.session.add(MutedCall(muter_id=current_user.id, muted_id=contact_id))
+        db.session.commit()
+    return jsonify({'ok': True})
+
+@app.route('/api/chat/unmute-calls', methods=['POST'])
+@login_required
+def unmute_calls():
+    contact_id = request.json.get('contact_id')
+    m = MutedCall.query.filter_by(muter_id=current_user.id, muted_id=contact_id).first()
+    if m:
+        db.session.delete(m)
+        db.session.commit()
+    return jsonify({'ok': True})
+
+@app.route('/api/chat/call-status', methods=['GET'])
+@login_required
+def call_status():
+    contact_id = request.args.get('contact_id')
+    muted = MutedCall.query.filter_by(muter_id=current_user.id, muted_id=contact_id).first() is not None
+    return jsonify({'call_muted': muted})
+
+@app.route('/api/call/log', methods=['POST'])
+@login_required
+def log_call():
+    """Insert call status as a neutral event inside the DM conversation, not in System TextCord."""
+    data = request.json
+    contact_id = data.get('contact_id')
+    kind = data.get('kind')  # 'ended' | 'missed' | 'declined' | 'failed'
+    duration = int(data.get('duration') or 0)
+    other = User.query.get(contact_id)
+    if not other:
+        return jsonify({'error': 'no user'}), 400
+    me_name = current_user.full_name
+    other_name = other.full_name
+    def fmt(sec):
+        h = sec // 3600; m = (sec % 3600) // 60; s = sec % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    if kind == 'ended':
+        text = f"Call ended. Duration: {fmt(duration)}"
+    elif kind == 'missed':
+        text = f"Missed call: {me_name} called {other_name}"
+    elif kind == 'declined':
+        text = f"Call declined: {me_name} called {other_name}"
+    else:
+        text = f"Call failed: {me_name} and {other_name}"
+    msg = Message(sender_id=current_user.id, receiver_id=contact_id, content=text, is_system=True, status='delivered')
+    db.session.add(msg)
+    db.session.commit()
+    socketio.emit('new_message', {
+        'id': msg.id,
+        'sender_id': current_user.id,
+        'receiver_id': contact_id,
+        'content': text,
+        'status': 'delivered',
+        'is_system': True,
+        'is_mine': False,
+        'sender_name': current_user.display_name,
+        'reply_to_content': None,
+        'reply_to_sender': None,
+        'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
+    }, room=f'user_{contact_id}')
+    return jsonify({'ok': True, 'id': msg.id})
+
 @app.route('/api/chat/rename', methods=['GET', 'POST'])
 @login_required
 def rename_contact():
@@ -1313,6 +1381,58 @@ def handle_heartbeat():
                 s.last_active = datetime.utcnow()
         db.session.commit()
 
+# ─── WebRTC Call Signaling ───
+@socketio.on('call_invite')
+def call_invite(data):
+    if not current_user.is_authenticated:
+        return
+    target = data.get('target_id')
+    if not target:
+        return
+    # Block check
+    if BlockedUser.query.filter_by(blocker_id=target, blocked_id=current_user.id).first():
+        emit('call_failed', {'reason': 'You are blocked by this user.'})
+        return
+    if BlockedUser.query.filter_by(blocker_id=current_user.id, blocked_id=target).first():
+        emit('call_failed', {'reason': 'You blocked this user.'})
+        return
+    secure = bool(data.get('secure'))
+    socketio.emit('call_incoming', {
+        'from_id': current_user.id,
+        'from_name': current_user.full_name,
+        'from_nickname': current_user.nickname or '',
+        'secure': secure,
+    }, room=f'user_{target}')
+
+@socketio.on('call_accept')
+def call_accept(data):
+    if not current_user.is_authenticated: return
+    socketio.emit('call_accepted', {'from_id': current_user.id}, room=f'user_{data.get("target_id")}')
+
+@socketio.on('call_decline')
+def call_decline(data):
+    if not current_user.is_authenticated: return
+    socketio.emit('call_declined', {'from_id': current_user.id}, room=f'user_{data.get("target_id")}')
+
+@socketio.on('call_cancel')
+def call_cancel(data):
+    if not current_user.is_authenticated: return
+    socketio.emit('call_cancelled', {'from_id': current_user.id}, room=f'user_{data.get("target_id")}')
+
+@socketio.on('call_end')
+def call_end(data):
+    if not current_user.is_authenticated: return
+    socketio.emit('call_ended', {'from_id': current_user.id}, room=f'user_{data.get("target_id")}')
+
+@socketio.on('call_signal')
+def call_signal(data):
+    """Relay WebRTC offer/answer/ice candidates."""
+    if not current_user.is_authenticated: return
+    socketio.emit('call_signal', {
+        'from_id': current_user.id,
+        'payload': data.get('payload'),
+    }, room=f'user_{data.get("target_id")}')
+
 # ─── INIT ───
 
 def init_db():
@@ -1321,7 +1441,4 @@ def init_db():
 
 if __name__ == '__main__':
     init_db()
-    import os as _os
-    _host = _os.environ.get('TEXTCORD_HOST', '0.0.0.0')
-    _port = int(_os.environ.get('TEXTCORD_PORT', '5000'))
-    socketio.run(app, host=_host, port=_port, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=os.environ.get('TEXTCORD_HOST', '0.0.0.0'), port=int(os.environ.get('TEXTCORD_PORT', '5000')))

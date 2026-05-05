@@ -196,6 +196,14 @@ class MutedUser(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class MutedCall(db.Model):
+    __tablename__ = 'muted_calls'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    muter_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    muted_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class ChatNickname(db.Model):
     __tablename__ = 'chat_nicknames'
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
