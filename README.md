@@ -6,7 +6,7 @@ Minimalist text-based communicator focused on simplicity, performance, and contr
 
 ## 📦 Version
 
-**Current version:** Alpha 1.0.0
+**Current version:** Alpha 1.0
 
 ---
 
@@ -67,11 +67,11 @@ The goal is to provide a fast, distraction-free, and fully controlled messaging 
 
 ### Alpha phase
 
-#### Alpha 1.0.0
+#### Alpha 1.0
 
 * Removed HTTP entirely (HTTPS required)
 * Simplified installation via `./install.sh`
-* WebRTC-based direct messaging (non-group)
+* WebRTC-based voice communication (peer-to-peer, non-group)
 * Fixed NGINX + HSTS configuration (HSTS enforced)
 * Improved security model
 * Improved overall system stability
@@ -109,7 +109,7 @@ This project was built as a learning and experimental system to:
 
 ## 📄 Status
 
-🚧 Alpha stage (1.0.0)
+🚧 Alpha stage (1.0)
 ✔️ Core functionality working
 ⚠️ Further improvements required before beta
 
