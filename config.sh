@@ -9,6 +9,95 @@ NC='\033[0m'
 
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_NAME="textcord"
+PORT=5000
+
+rewrite_nginx_vhost() {
+    local CERT_DIR="${INSTALL_DIR}/certs"
+    local DOMAIN="$1"
+    if [ -z "$DOMAIN" ] && [ -f /etc/dnsmasq.d/textcord.conf ]; then
+        DOMAIN=$(grep "address=/" /etc/dnsmasq.d/textcord.conf | head -1 | cut -d/ -f2)
+    fi
+    [ -z "$DOMAIN" ] && return 1
+    local hsts_line=""
+    if [ "$USE_HSTS" == "yes" ]; then
+        hsts_line='    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;'
+    fi
+    sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGX
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate ${CERT_DIR}/server.crt;
+    ssl_certificate_key ${CERT_DIR}/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets on;
+
+    keepalive_timeout 75s;
+    keepalive_requests 1000;
+    client_max_body_size 50m;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml font/woff font/woff2;
+
+${hsts_line}
+
+    location /static/ {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable";
+${hsts_line}
+    }
+
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+}
+NGX
+    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/textcord
+    sudo rm -f /etc/nginx/sites-enabled/default
+}
 
 show_header() {
     clear
@@ -31,18 +120,21 @@ show_menu() {
     echo "    2. Regenerate SSL Certificate"
     echo ""
     echo -e "  ${BOLD}── Service ──${NC}"
-    echo "    3. Enable Autostart (systemd)"
-    echo "    4. Disable Autostart (systemd)"
-    echo "    5. Service Status"
-    echo "    6. Restart Service"
+    if systemctl is-enabled --quiet ${SERVICE_NAME} 2>/dev/null; then
+        echo -e "    3. Disable Autostart (systemd) ${GREEN}[enabled]${NC}"
+    else
+        echo -e "    3. Enable Autostart (systemd) ${YELLOW}[disabled]${NC}"
+    fi
+    echo "    4. Service Status"
+    echo "    5. Restart Service"
     echo ""
     echo -e "  ${BOLD}── Administration ──${NC}"
-    echo "    7. Change Admin Password"
-    echo "    8. Unlock Account"
-    echo "    9. Lock Account"
+    echo "    6. Change Admin Password"
+    echo "    7. Unlock Account"
+    echo "    8. Lock Account"
     echo ""
     echo -e "  ${BOLD}── Maintenance ──${NC}"
-    echo "   10. Factory Reset"
+    echo "    9. Factory Reset"
     echo "    0. Exit"
     echo ""
     read -p "  Select option: " OPTION
@@ -125,44 +217,36 @@ regenerate_cert() {
     show_header
     echo -e "${BOLD}  Regenerate SSL Certificate${NC}"
     echo ""
-
+    
     CERT_DIR="${INSTALL_DIR}/certs"
-
+    
+    # Read domain from existing config
     DOMAIN=""
     if [ -f /etc/dnsmasq.d/textcord.conf ]; then
         DOMAIN=$(grep "address=/" /etc/dnsmasq.d/textcord.conf | head -1 | cut -d/ -f2)
     fi
-
+    
     if [ -z "$DOMAIN" ]; then
         read -p "  Enter domain name: " DOMAIN
     else
         echo -e "  Domain: ${GREEN}${DOMAIN}${NC}"
     fi
-
+    
     BIND_IP=$(hostname -I | awk '{print $1}')
-    [ -z "$BIND_IP" ] && BIND_IP="127.0.0.1"
     echo -e "  Server IP: ${GREEN}${BIND_IP}${NC}"
     echo ""
-    read -p "  Listening mode? [1=HTTPS only (HTTP redirects to HTTPS) / 2=HTTP and HTTPS side-by-side]: " HTTPS_MODE
-    USE_HSTS="no"
-    if [ "$HTTPS_MODE" = "1" ]; then
-        echo -e "${YELLOW}  [!] HSTS requires the CA certificate to be installed/trusted on the host machine!${NC}"
-        read -p "  Use HSTS protocol? [1=Yes / 2=No]: " HSTS_OPT
-        [ "$HSTS_OPT" = "1" ] && USE_HSTS="yes"
-    fi
-    echo ""
-
+    
     mkdir -p "$CERT_DIR"
-
+    
     echo -e "${GREEN}[*] Generating new CA...${NC}"
     openssl genrsa -out "${CERT_DIR}/ca.key" 4096 2>/dev/null
     openssl req -new -x509 -days 3650 -key "${CERT_DIR}/ca.key" \
         -out "${CERT_DIR}/ca.crt" \
         -subj "/C=PL/ST=TextCord/L=TextCord/O=TextCord CA/CN=TextCord Root CA" 2>/dev/null
-
+    
     echo -e "${GREEN}[*] Generating server certificate...${NC}"
     openssl genrsa -out "${CERT_DIR}/server.key" 2048 2>/dev/null
-
+    
     cat > "${CERT_DIR}/san.cnf" << SANEOF
 [req]
 distinguished_name = req_distinguished_name
@@ -185,11 +269,11 @@ DNS.2 = *.${DOMAIN}
 IP.1 = ${BIND_IP}
 IP.2 = 127.0.0.1
 SANEOF
-
+    
     openssl req -new -key "${CERT_DIR}/server.key" \
         -out "${CERT_DIR}/server.csr" \
         -config "${CERT_DIR}/san.cnf" 2>/dev/null
-
+    
     openssl x509 -req -days 3650 \
         -in "${CERT_DIR}/server.csr" \
         -CA "${CERT_DIR}/ca.crt" \
@@ -198,106 +282,42 @@ SANEOF
         -out "${CERT_DIR}/server.crt" \
         -extensions v3_req \
         -extfile "${CERT_DIR}/san.cnf" 2>/dev/null
-
-    if [ ! -s "${CERT_DIR}/server.crt" ] || [ ! -s "${CERT_DIR}/server.key" ]; then
-        echo -e "${RED}  Certificate generation failed. NGINX was not changed.${NC}"
-        echo ""
-        read -p "  Press Enter to continue..."
-        return
-    fi
-
+    
     CLIENT_CERT_PATH="${HOME}/textcord_ca_${DOMAIN}.crt"
     cp "${CERT_DIR}/ca.crt" "${CLIENT_CERT_PATH}"
     chmod 644 "${CLIENT_CERT_PATH}"
 
-    PORT=$(grep -oP 'TEXTCORD_PORT="\K[0-9]+' "${INSTALL_DIR}/start.sh" 2>/dev/null || echo "5000")
-
-    if [ "$HTTPS_MODE" = "1" ]; then
-        HTTP_BLOCK="server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-    return 301 https://\$host\$request_uri;
-}"
-    else
-        HTTP_BLOCK="server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-    client_max_body_size 25m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \"upgrade\";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto http;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-}"
+    # Detect HSTS state from current nginx vhost
+    USE_HSTS="no"
+    if grep -q "Strict-Transport-Security" /etc/nginx/sites-available/textcord 2>/dev/null; then
+        USE_HSTS="yes"
     fi
-
-    HSTS_LINE=""
-    if [ "$USE_HSTS" = "yes" ]; then
-        HSTS_LINE="    add_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;"
-    fi
-
-    sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
-${HTTP_BLOCK}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${DOMAIN};
-
-    ssl_certificate "${CERT_DIR}/server.crt";
-    ssl_certificate_key "${CERT_DIR}/server.key";
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers off;
-${HSTS_LINE}
-    client_max_body_size 25m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-}
-NGINXEOF
-
-    sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/textcord
-    sudo rm -f /etc/nginx/sites-enabled/default
-    if sudo nginx -t; then
-        sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx 2>/dev/null
-        echo ""
-        echo -e "${GREEN}  Certificate and NGINX configuration regenerated successfully!${NC}"
-        echo -e "  CA file: ${YELLOW}${CLIENT_CERT_PATH}${NC}"
-        echo -e "${YELLOW}  Import this file in your browser/OS as Trusted Root CA${NC}"
-    else
-        echo ""
-        echo -e "${RED}  NGINX configuration test failed. Check the output above before restarting NGINX.${NC}"
-    fi
-
+    rewrite_nginx_vhost
+    sudo nginx -t 2>&1 && sudo systemctl reload nginx 2>/dev/null
+    
+    echo ""
+    echo -e "${GREEN}  Certificate regenerated successfully!${NC}"
+    echo -e "  CA file: ${YELLOW}${CLIENT_CERT_PATH}${NC}"
+    echo -e "${YELLOW}  Import this file in your browser/OS as Trusted Root CA${NC}"
     echo ""
     read -p "  Press Enter to continue..."
 }
-enable_service() {
+
+toggle_service() {
     show_header
+    if systemctl is-enabled --quiet ${SERVICE_NAME} 2>/dev/null; then
+        echo -e "${BOLD}  Disable Autostart${NC}"
+        echo ""
+        sudo systemctl stop ${SERVICE_NAME} 2>/dev/null
+        sudo systemctl disable ${SERVICE_NAME} 2>/dev/null
+        echo -e "${GREEN}  Service disabled.${NC}"
+        echo ""
+        read -p "  Press Enter to continue..."
+        return
+    fi
     echo -e "${BOLD}  Enable Autostart${NC}"
     echo ""
-    
+
     sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << SVCEOF
 [Unit]
 Description=TextCord Messaging Service
@@ -307,10 +327,11 @@ After=network.target
 Type=simple
 User=$(whoami)
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/app.py
-Restart=always
+ExecStart=/bin/bash ${INSTALL_DIR}/start.sh
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
 RestartSec=5
-Environment=SECRET_KEY=$(grep -oP "SECRET_KEY=\"\K[^\"]*" "${INSTALL_DIR}/start.sh" 2>/dev/null || echo "$(python3 -c 'import secrets;print(secrets.token_hex(32))')")
 
 [Install]
 WantedBy=multi-user.target
@@ -322,19 +343,6 @@ SVCEOF
     
     echo -e "${GREEN}  Service enabled and started!${NC}"
     echo -e "  Use: ${CYAN}sudo systemctl status ${SERVICE_NAME}${NC}"
-    echo ""
-    read -p "  Press Enter to continue..."
-}
-
-disable_service() {
-    show_header
-    echo -e "${BOLD}  Disable Autostart${NC}"
-    echo ""
-    
-    sudo systemctl stop ${SERVICE_NAME} 2>/dev/null
-    sudo systemctl disable ${SERVICE_NAME} 2>/dev/null
-    
-    echo -e "${GREEN}  Service disabled.${NC}"
     echo ""
     read -p "  Press Enter to continue..."
 }
@@ -358,7 +366,18 @@ service_status() {
     if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
         echo -e "  Service: ${GREEN}Running${NC}"
     else
-        echo -e "  Service: ${RED}Stopped${NC}"
+        if systemctl is-enabled --quiet ${SERVICE_NAME} 2>/dev/null; then
+            FAILSTATE=$(systemctl is-failed ${SERVICE_NAME} 2>/dev/null)
+            if [ "$FAILSTATE" == "failed" ]; then
+                echo -e "  Service: ${RED}Failed to start (autostart enabled)${NC}"
+                LASTERR=$(journalctl -u ${SERVICE_NAME} --no-pager -n 3 --priority=err 2>/dev/null | tail -1)
+                [ -n "$LASTERR" ] && echo -e "  Last error: ${RED}${LASTERR}${NC}"
+            else
+                echo -e "  Service: ${RED}Stopped${NC}"
+            fi
+        else
+            echo -e "  Service: ${RED}Stopped${NC}"
+        fi
     fi
     
     # Autostart
@@ -551,10 +570,10 @@ factory_reset() {
     echo -e "${RED}${BOLD}  ⚠ FACTORY RESET ⚠${NC}"
     echo ""
     echo -e "  This will:"
-    echo -e "    - Delete the database"
-    echo -e "    - Remove SSL certificates"
+    echo -e "    - Reset the database (single admin user only)"
+    echo -e "    - Regenerate the SSL certificate"
+    echo -e "    - Reconfigure NGINX/DNS to default state"
     echo -e "    - Stop and remove the systemd service"
-    echo -e "    - Remove NGINX and DNS configuration"
     echo ""
     read -p "  Type 'RESET' to confirm: " CONFIRM
     
@@ -571,24 +590,15 @@ factory_reset() {
     sudo rm -f /etc/systemd/system/${SERVICE_NAME}.service
     sudo systemctl daemon-reload
     
-    echo -e "${RED}[*] Removing database...${NC}"
+    echo -e "${RED}[*] Removing database (will be re-created on next start)...${NC}"
     rm -f "${INSTALL_DIR}/instance/textcord.db"
     
-    echo -e "${RED}[*] Removing certificates...${NC}"
+    echo -e "${RED}[*] Removing old certificates...${NC}"
     rm -rf "${INSTALL_DIR}/certs"
     rm -f "${HOME}"/textcord_ca_*.crt
-    
-    echo -e "${RED}[*] Removing NGINX config...${NC}"
-    sudo rm -f /etc/nginx/sites-enabled/textcord
-    sudo rm -f /etc/nginx/sites-available/textcord
-    sudo nginx -t 2>/dev/null && sudo systemctl reload nginx 2>/dev/null
-    
-    echo -e "${RED}[*] Removing DNS config...${NC}"
-    sudo rm -f /etc/dnsmasq.d/textcord.conf
-    sudo systemctl restart dnsmasq 2>/dev/null
-    
+
     echo ""
-    echo -e "${GREEN}  Factory reset complete. Run ./install.sh to set up again.${NC}"
+    echo -e "${GREEN}  Factory reset complete. Run ./install.sh to recreate the admin and re-provision NGINX/DNS/SSL.${NC}"
     echo ""
     read -p "  Press Enter to exit..."
     exit 0
@@ -600,14 +610,13 @@ while true; do
     case $OPTION in
         1) set_static_ip ;;
         2) regenerate_cert ;;
-        3) enable_service ;;
-        4) disable_service ;;
-        5) service_status ;;
-        6) restart_service ;;
-        7) change_admin_password ;;
-        8) manage_account "unlock" ;;
-        9) manage_account "lock" ;;
-        10) factory_reset ;;
+        3) toggle_service ;;
+        4) service_status ;;
+        5) restart_service ;;
+        6) change_admin_password ;;
+        7) manage_account "unlock" ;;
+        8) manage_account "lock" ;;
+        9) factory_reset ;;
         0) echo "Goodbye!"; exit 0 ;;
         *) echo -e "${RED}  Invalid option${NC}"; sleep 1 ;;
     esac
