@@ -1,13 +1,21 @@
 # TextCord
 
-Minimalist text-based communicator built with a focus on simplicity and control.
+Minimalist text-based communicator focused on simplicity, performance, and control.
+
+---
+
+## 📦 Version
+
+**Current version:** Alpha 1.0.0
+
+---
 
 ## 📌 About
 
-TextCord is a lightweight communication system that operates entirely in text mode.
-Instead of modern UI, it uses ASCII-based interface and minimal CSS (black & white theme).
+TextCord is a lightweight communication system operating entirely in text mode.
 
-The goal was to create a simple, fast, and controlled messaging environment.
+Instead of modern graphical interfaces, it uses an ASCII-based UI with minimal CSS (black & white theme).
+The goal is to provide a fast, distraction-free, and fully controlled messaging environment.
 
 ---
 
@@ -15,15 +23,20 @@ The goal was to create a simple, fast, and controlled messaging environment.
 
 * Text-based communication system
 * ASCII UI (no images, no heavy frontend)
+* Minimal CSS (black & white theme)
 * User management system (including admin actions)
-* Working installation process (DNS + SSL certificate)
-* Stable backend with no critical errors
+* Simplified installation process (`./install.sh`)
+* HTTPS-only (no HTTP support)
+* WebRTC-based direct messaging (non-group)
+* Stable backend (no critical errors)
 
 ---
 
 ## 🧪 Development history
 
-### prototype-0.1
+### Prototype phase
+
+#### prototype-0.1
 
 * Initial working version
 * Required manual IP connection
@@ -31,7 +44,7 @@ The goal was to create a simple, fast, and controlled messaging environment.
 * UI issues and missing features
 * No notifications
 
-### prototype-1.0
+#### prototype-1.0
 
 * Fixed installation process
 * DNS & SSL fully working
@@ -39,22 +52,39 @@ The goal was to create a simple, fast, and controlled messaging environment.
 * Functional text communicator
 * Improved system reliability
 
- ### prototype-2.0
- * function of creating and managing group chats
- * Fixed chat/group notifications
- * Fixed account creation
+#### prototype-2.0
 
- ### prototype-2.1
- * fixed installer bug
- * fixed ngnix config
+* Group chat system
+* Fixed notifications
+* Fixed account creation
+
+#### prototype-2.1
+
+* Fixed installer bug
+* Fixed NGINX configuration
+
+---
+
+### Alpha phase
+
+#### Alpha 1.0.0
+
+* Removed HTTP entirely (HTTPS required)
+* Simplified installation via `./install.sh`
+* WebRTC-based direct messaging (non-group)
+* Fixed NGINX + HSTS configuration (HSTS enforced)
+* Improved security model
+* Improved overall system stability
 
 ---
 
 ## ⚙️ Tech concept
 
 * Text-first interface (ASCII instead of images)
-* Minimal CSS (black/white theme)
-* Focus on performance and simplicity
+* Minimal frontend (CSS only where necessary)
+* Backend-focused architecture
+* Performance and simplicity over visuals
+* Secure-by-default approach (HTTPS + HSTS)
 
 ---
 
@@ -63,18 +93,39 @@ The goal was to create a simple, fast, and controlled messaging environment.
 This project was built as a learning and experimental system to:
 
 * Understand communication systems
-* Improve backend logic
-* Work with networking, DNS, and certificates
+* Improve backend architecture
+* Work with networking, DNS, and SSL certificates
+* Explore minimal interface design
 
 ---
 
 ## ⚠️ Notes
 
-This is a minimalist project — intentionally stripped of modern UI features.
+* This is a minimalist project — modern UI features are intentionally excluded
+* Not production-ready yet
+* Some features (e.g. WebRTC for groups) are still in development
 
 ---
 
 ## 📄 Status
 
-✔️ Functional prototype (v1.0)
-🚧 Further improvements possible
+🚧 Alpha stage (1.0.0)
+✔️ Core functionality working
+⚠️ Further improvements required before beta
+
+---
+
+## 🔧 Installation
+
+```bash
+git clone https://github.com/Michalsonix/textcord.git
+cd textcord
+chmod +x install.sh
+./install.sh
+```
+
+---
+
+## 📜 License
+
+(To be defined)
