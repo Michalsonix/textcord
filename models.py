@@ -163,6 +163,7 @@ class LoginLog(db.Model):
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
     ip_address = db.Column(db.String(45), nullable=True)
     user_agent = db.Column(db.Text, nullable=True)
+    mac_or_fp = db.Column(db.String(128), nullable=True)
     success = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -246,3 +247,31 @@ class GroupMessageRead(db.Model):
     last_read_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (db.UniqueConstraint('group_id', 'user_id'),)
+
+
+
+class DeviceRegistration(db.Model):
+    """Tracks self-registration events keyed by MAC address (LAN) or browser fingerprint."""
+    __tablename__ = 'device_registrations'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    device_key = db.Column(db.String(128), nullable=False, index=True)  # MAC or fp hash
+    is_mac = db.Column(db.Boolean, default=False)
+    ip_address = db.Column(db.String(45), nullable=True)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user = db.relationship('User', foreign_keys=[user_id])
+
+
+def runtime_migrate():
+    """Add columns/tables added after initial release without losing data."""
+    from sqlalchemy import inspect, text
+    insp = inspect(db.engine)
+    # login_logs.mac_or_fp
+    if 'login_logs' in insp.get_table_names():
+        cols = [c['name'] for c in insp.get_columns('login_logs')]
+        if 'mac_or_fp' not in cols:
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE login_logs ADD COLUMN mac_or_fp VARCHAR(128)"))
+    # device_registrations table
+    if 'device_registrations' not in insp.get_table_names():
+        DeviceRegistration.__table__.create(db.engine)

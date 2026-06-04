@@ -1,18 +1,93 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_file, flash, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead, MutedCall
+from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead, MutedCall, DeviceRegistration, runtime_migrate
 from datetime import datetime, timedelta
 import uuid
 import os
 import json
 import secrets
 import io
+import subprocess
+import re
+import hashlib
+import base64
+import ipaddress
+from functools import wraps
+from werkzeug.utils import secure_filename
+from cryptography.fernet import Fernet
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///textcord.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Trust X-Forwarded-* from local nginx so request.remote_addr is the real client IP
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+app.config['MAX_CONTENT_LENGTH'] = 30 * 1024 * 1024  # 30 MB upload cap
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+BLOCKED_EXT = {'exe', 'msi', 'com', 'scr', 'bat', 'cmd', 'vbs', 'vbe', 'ps1', 'ps1xml', 'js', 'jse', 'wsf', 'wsh', 'jar', 'app', 'dll', 'sys'}
+
+# Server-side feature flags from /etc/textcord.conf (written by installer)
+SERVER_FLAGS = {'ALLOW_REGISTRATION': 'no', 'DOMAIN': '', 'USE_HSTS': 'no'}
+try:
+    with open('/etc/textcord.conf') as _f:
+        for _line in _f:
+            if '=' in _line:
+                _k, _v = _line.strip().split('=', 1)
+                SERVER_FLAGS[_k] = _v.strip('"').strip("'")
+except Exception:
+    pass
+
+def registration_enabled():
+    return SERVER_FLAGS.get('ALLOW_REGISTRATION', 'no').lower() == 'yes'
+
+def _fernet():
+    key = hashlib.sha256(app.config['SECRET_KEY'].encode() if isinstance(app.config['SECRET_KEY'], str) else app.config['SECRET_KEY']).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+def _is_private_ip(ip):
+    try:
+        return ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback
+    except Exception:
+        return False
+
+def lookup_mac(ip):
+    """Best-effort ARP lookup. Only works for hosts on the same LAN."""
+    if not ip:
+        return None
+    try:
+        out = subprocess.run(['arp', '-n', ip], capture_output=True, text=True, timeout=2).stdout
+        m = re.search(r'(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})', out)
+        if m:
+            mac = m.group(1).lower()
+            if mac != '00:00:00:00:00:00':
+                return mac
+    except Exception:
+        pass
+    return None
+
+def device_key_for_request(fp_from_form=None):
+    """Return (key, is_mac). Prefer real MAC when client is on LAN, else browser fingerprint hash."""
+    ip = request.remote_addr or ''
+    if _is_private_ip(ip):
+        mac = lookup_mac(ip)
+        if mac:
+            return mac, True
+    fp = (fp_from_form or request.form.get('device_fp') or request.cookies.get('device_fp') or '').strip()
+    if fp:
+        return 'fp:' + hashlib.sha256(fp.encode()).hexdigest()[:32], False
+    return None, False
+
+def admin_required(f):
+    @wraps(f)
+    def w(*a, **kw):
+        if not current_user.is_authenticated or current_user.role != 'admin':
+            return jsonify({'error': 'Forbidden'}), 403
+        return f(*a, **kw)
+    return w
 
 db.init_app(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -46,6 +121,11 @@ def check_ban_on_request():
                 return jsonify({'error': 'banned', 'redirect': '/login'}), 403
             return redirect(url_for('login'))
 
+
+@app.context_processor
+def _inject_flags():
+    return {'ALLOW_REGISTRATION_UI': registration_enabled()}
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(user_id)
@@ -69,15 +149,16 @@ def login():
         user = User.query.filter_by(identifier=identifier).first()
         
         if user and user.check_password(password):
+            _dk, _ = device_key_for_request()
             log = LoginLog(user_id=user.id, ip_address=request.remote_addr,
-                          user_agent=request.headers.get('User-Agent'), success=True)
+                          user_agent=request.headers.get('User-Agent'), mac_or_fp=_dk, success=True)
             db.session.add(log)
             
             if user.is_deleted:
                 error = "This account has been deleted."
                 log.success = False
                 db.session.commit()
-                return render_template('login.html', error=error)
+                return render_template('login.html', error=error, allow_registration=registration_enabled())
             
             if user.is_panic_locked:
                 db.session.commit()
@@ -104,7 +185,7 @@ def login():
                 error = "Session limit reached. If this wasn't you, contact the administrator."
                 log.success = False
                 db.session.commit()
-                return render_template('login.html', error=error)
+                return render_template('login.html', error=error, allow_registration=registration_enabled())
             
             user.last_active = datetime.utcnow()
             db.session.commit()
@@ -123,12 +204,13 @@ def login():
             return redirect(url_for('messages'))
         else:
             if user:
+                _dk, _ = device_key_for_request()
                 log = LoginLog(user_id=user.id, ip_address=request.remote_addr,
-                              user_agent=request.headers.get('User-Agent'), success=False)
+                              user_agent=request.headers.get('User-Agent'), mac_or_fp=_dk, success=False)
                 db.session.add(log)
                 db.session.commit()
             error = "Invalid identifier or password."
-    return render_template('login.html', error=error)
+    return render_template('login.html', error=error, allow_registration=registration_enabled())
 
 @app.route('/login/recovery', methods=['GET', 'POST'])
 def login_recovery():
@@ -1050,7 +1132,7 @@ def admin_get_user(user_id):
         'is_panic_locked': user.is_panic_locked,
         'activity_status': user.activity_status(),
         'last_active': user.last_active.isoformat() if user.last_active else None,
-        'login_logs': [{'id': l.id, 'ip': l.ip_address, 'success': l.success, 'date': l.created_at.strftime('%Y-%m-%d %H:%M:%S')} for l in login_logs],
+        'login_logs': [{'id': l.id, 'ip': l.ip_address, 'mac': l.mac_or_fp, 'success': l.success, 'date': l.created_at.strftime('%Y-%m-%d %H:%M:%S')} for l in login_logs],
         'reports_by_count': len(reports_by),
         'reports_on_count': len(reports_on),
         'reports_by': [{'id': r.id, 'reported': r.reported_user.display_name, 'message': r.message.content[:100], 'date': r.created_at.strftime('%Y-%m-%d %H:%M:%S')} for r in reports_by],
@@ -1433,11 +1515,206 @@ def call_signal(data):
         'payload': data.get('payload'),
     }, room=f'user_{data.get("target_id")}')
 
+
+
+# ─── SELF-REGISTRATION ───
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if not registration_enabled():
+        return redirect(url_for('login'))
+    if current_user.is_authenticated:
+        return redirect(url_for('messages'))
+    error = None
+    if request.method == 'POST':
+        identifier = request.form.get('identifier', '').strip()
+        first_name = request.form.get('first_name', '').strip()
+        last_name = request.form.get('last_name', '').strip()
+        password = request.form.get('password', '').strip()
+        nickname = request.form.get('nickname', '').strip() or None
+        if not identifier or not first_name or not last_name or len(password) < 6:
+            error = "All fields required, password min 6 chars."
+        elif User.query.filter_by(identifier=identifier).first():
+            error = "Identifier already taken."
+        else:
+            dk, is_mac = device_key_for_request()
+            if not dk:
+                error = "Could not identify device. Please enable JavaScript and try again."
+            else:
+                existing = DeviceRegistration.query.filter_by(device_key=dk).count()
+                if existing >= 1:
+                    error = "Registration limit reached for this device."
+                else:
+                    u = User(identifier=identifier, first_name=first_name, last_name=last_name,
+                            nickname=nickname, role='user')
+                    u.set_password(password)
+                    db.session.add(u)
+                    db.session.flush()
+                    reg = DeviceRegistration(device_key=dk, is_mac=is_mac,
+                                             ip_address=request.remote_addr, user_id=u.id)
+                    db.session.add(reg)
+                    db.session.commit()
+                    send_system_message(u.id, f"Welcome {first_name} {last_name}! Your account has been created. Please be respectful.")
+                    return redirect(url_for('login'))
+    return render_template('register.html', error=error)
+
+
+# ─── ADMIN: DEVICE REGISTRATIONS ───
+
+@app.route('/admin/devices')
+@login_required
+def admin_devices_page():
+    if current_user.role != 'admin':
+        return redirect(url_for('messages'))
+    if not registration_enabled():
+        return redirect(url_for('admin_dashboard'))
+    from sqlalchemy import func
+    rows = db.session.query(
+        DeviceRegistration.device_key,
+        DeviceRegistration.is_mac,
+        func.count(DeviceRegistration.id).label('cnt')
+    ).group_by(DeviceRegistration.device_key, DeviceRegistration.is_mac).all()
+    devices = [{'key': r[0], 'is_mac': r[1], 'count': r[2]} for r in rows]
+    return render_template('admin/devices.html', devices=devices)
+
+
+@app.route('/api/admin/devices/<path:key>')
+@login_required
+@admin_required
+def admin_device_detail(key):
+    regs = DeviceRegistration.query.filter_by(device_key=key).order_by(DeviceRegistration.created_at.desc()).all()
+    return jsonify({
+        'key': key,
+        'count': len(regs),
+        'accounts': [{
+            'user_id': r.user_id,
+            'identifier': r.user.identifier if r.user else '(deleted)',
+            'name': r.user.full_name if r.user else '?',
+            'ip': r.ip_address,
+            'created_at': r.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'is_mac': r.is_mac,
+        } for r in regs]
+    })
+
+
+@app.route('/api/admin/devices/<path:key>/reset', methods=['POST'])
+@login_required
+@admin_required
+def admin_device_reset(key):
+    DeviceRegistration.query.filter_by(device_key=key).delete()
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ─── FILE UPLOADS (encrypted at rest) ───
+
+class _UploadIndex:
+    """Filesystem-backed index: id -> (original_name, mime, size). Stored alongside encrypted blobs."""
+    @staticmethod
+    def save(file_id, meta):
+        with open(os.path.join(UPLOAD_DIR, file_id + '.meta'), 'w') as f:
+            json.dump(meta, f)
+    @staticmethod
+    def load(file_id):
+        path = os.path.join(UPLOAD_DIR, file_id + '.meta')
+        if not os.path.exists(path):
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+
+@app.route('/api/messages/upload', methods=['POST'])
+@login_required
+def upload_file():
+    receiver_id = request.form.get('receiver_id')
+    group_id = request.form.get('group_id')
+    if not receiver_id and not group_id:
+        return jsonify({'error': 'Missing target'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+    fname = secure_filename(f.filename) or 'file'
+    if '.' not in fname:
+        return jsonify({'error': 'File extension required'}), 400
+    ext = fname.rsplit('.', 1)[1].lower()
+    if ext in BLOCKED_EXT:
+        return jsonify({'error': f'File type .{ext} is not allowed'}), 400
+    data = f.read()
+    if len(data) > 30 * 1024 * 1024:
+        return jsonify({'error': 'File exceeds 30 MB'}), 400
+    if len(data) == 0:
+        return jsonify({'error': 'Empty file'}), 400
+    file_id = secrets.token_urlsafe(24)
+    enc = _fernet().encrypt(data)
+    with open(os.path.join(UPLOAD_DIR, file_id + '.bin'), 'wb') as out:
+        out.write(enc)
+    _UploadIndex.save(file_id, {'name': fname, 'size': len(data), 'owner': current_user.id, 'ext': ext})
+
+    payload = json.dumps({'id': file_id, 'name': fname, 'size': len(data)})
+    content = '[FILE]' + payload
+
+    if group_id:
+        mem = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not mem:
+            return jsonify({'error': 'Not a member'}), 403
+        msg = Message(sender_id=current_user.id, group_id=group_id, content=content, status='delivered')
+        db.session.add(msg); db.session.commit()
+        members = GroupMember.query.filter_by(group_id=group_id).all()
+        for m in members:
+            if m.user_id != current_user.id:
+                socketio.emit('new_group_message', {
+                    'id': msg.id, 'group_id': group_id, 'sender_id': current_user.id,
+                    'content': content, 'sender_name': current_user.display_name,
+                    'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                }, room=f'user_{m.user_id}')
+        return jsonify({'ok': True, 'id': msg.id})
+    else:
+        blocked = BlockedUser.query.filter_by(blocker_id=receiver_id, blocked_id=current_user.id).first()
+        if blocked:
+            return jsonify({'error': 'You are blocked by this user'}), 403
+        msg = Message(sender_id=current_user.id, receiver_id=receiver_id, content=content, status='delivered')
+        db.session.add(msg); db.session.commit()
+        socketio.emit('new_message', {
+            'id': msg.id, 'sender_id': current_user.id, 'receiver_id': receiver_id,
+            'content': content, 'status': 'delivered', 'is_system': False, 'is_mine': False,
+            'sender_name': current_user.display_name, 'reply_to_content': None, 'reply_to_sender': None,
+            'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        }, room=f'user_{receiver_id}')
+        return jsonify({'ok': True, 'id': msg.id})
+
+
+@app.route('/api/files/<file_id>')
+@login_required
+def download_file(file_id):
+    if not re.fullmatch(r'[A-Za-z0-9_\-]{8,64}', file_id):
+        return jsonify({'error': 'Bad id'}), 400
+    meta = _UploadIndex.load(file_id)
+    if not meta:
+        return jsonify({'error': 'Not found'}), 404
+    path = os.path.join(UPLOAD_DIR, file_id + '.bin')
+    if not os.path.exists(path):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        with open(path, 'rb') as fh:
+            data = _fernet().decrypt(fh.read())
+    except Exception:
+        return jsonify({'error': 'Decryption failed'}), 500
+    return send_file(io.BytesIO(data), download_name=meta.get('name', 'file'), as_attachment=True)
+
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({'error': 'File too large (max 30 MB)'}), 413
+
+
 # ─── INIT ───
 
 def init_db():
     with app.app_context():
         db.create_all()
+        runtime_migrate()
 
 if __name__ == '__main__':
     init_db()

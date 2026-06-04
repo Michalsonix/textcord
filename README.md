@@ -1,12 +1,13 @@
 # TextCord
 
-Minimalist text-based communicator focused on simplicity, performance, and control.
+A minimalist text-based communicator focused on simplicity, performance, and control.
 
 ---
 
 ## 📦 Version
 
-**Current version:** Alpha 1.0.0
+**Current version:** Beta 1.0.0  
+**Previous:** Alpha 1.0.0
 
 ---
 
@@ -14,21 +15,39 @@ Minimalist text-based communicator focused on simplicity, performance, and contr
 
 TextCord is a lightweight communication system operating entirely in text mode.
 
-Instead of modern graphical interfaces, it uses an ASCII-based UI with minimal CSS (black & white theme).
+Instead of modern graphical interfaces, it uses an ASCII-based UI with minimal CSS (black & white theme).  
 The goal is to provide a fast, distraction-free, and fully controlled messaging environment.
 
 ---
 
-## 🚀 Features
+## 🚀 What's new in Beta 1.0.0
 
-* Text-based communication system
-* ASCII UI (no images, no heavy frontend)
-* Minimal CSS (black & white theme)
-* User management system (including admin actions)
-* Simplified installation process (`./install.sh`)
-* HTTPS-only (no HTTP support)
-* WebRTC-based direct messaging (non-group)
-* Stable backend (no critical errors)
+- 📁 File upload support up to 30MB  
+- 🔐 Fixed login logs system  
+- 🧾 Account registration system:
+  - can be enabled/disabled during installation  
+- 🧍 Device registration + fingerprinting:
+  - anti-spam protection  
+  - prevents mass account creation  
+- 🌐 Unified frontend name: **TextCord**
+  - selectable domain suffix:
+    - .pl
+    - .org
+    - .com
+    - .local  
+
+---
+
+## 🚀 Core features
+
+- Text-based communication system  
+- ASCII UI (no images, no heavy frontend)  
+- Minimal CSS (black & white theme)  
+- User management system (including admin actions)  
+- Simple installation (`./install.sh`)  
+- HTTPS-only (no HTTP support)  
+- WebRTC-based direct messaging (non-group)  
+- Stable backend (no critical errors)  
 
 ---
 
@@ -37,81 +56,102 @@ The goal is to provide a fast, distraction-free, and fully controlled messaging 
 ### Prototype phase
 
 #### prototype-0.1
-
-* Initial working version
-* Required manual IP connection
-* No SSL / DNS support
-* UI issues and missing features
-* No notifications
+- Initial working version  
+- Manual IP connection  
+- No SSL / DNS support  
+- UI issues  
+- No notifications  
 
 #### prototype-1.0
-
-* Fixed installation process
-* DNS & SSL fully working
-* Stable application (no critical bugs)
-* Functional text communicator
-* Improved system reliability
+- Fixed installation process  
+- DNS & SSL working  
+- Stable communicator  
+- Improved reliability  
 
 #### prototype-2.0
-
-* Group chat system
-* Fixed notifications
-* Fixed account creation
+- Group chat system  
+- Fixed notifications  
+- Fixed account creation  
 
 #### prototype-2.1
-
-* Fixed installer bug
-* Fixed NGINX configuration
+- Installer bug fixed  
+- NGINX configuration fixed  
 
 ---
 
 ### Alpha phase
 
 #### Alpha 1.0.0
-
-* Removed HTTP entirely (HTTPS required)
-* Simplified installation via `./install.sh`
-* WebRTC-based direct messaging (non-group)
-* Fixed NGINX + HSTS configuration (HSTS enforced)
-* Improved security model
-* Improved overall system stability
+- HTTPS-only (HTTP removed)  
+- Simplified installation via `./install.sh`  
+- WebRTC direct messaging  
+- HSTS enforced  
+- Security improvements  
+- Stability improvements  
 
 ---
 
-## ⚙️ Tech concept
+### Beta phase
 
-* Text-first interface (ASCII instead of images)
-* Minimal frontend (CSS only where necessary)
-* Backend-focused architecture
-* Performance and simplicity over visuals
-* Secure-by-default approach (HTTPS + HSTS)
+#### Beta 1.0.0
+- File upload system (up to 30MB)  
+- Login logs fix  
+- Toggleable account registration during install  
+- Device registration + fingerprinting anti-spam system  
+- Protection against mass account creation  
+- Unified frontend name: TextCord  
+- Domain suffix selection (.pl / .org / .com / .local)  
+
+---
+
+## 🔧 Tech concept
+
+- Text-first interface (ASCII UI)  
+- Minimal frontend  
+- Backend-heavy architecture  
+- Performance over visuals  
+- Secure-by-default (HTTPS + HSTS)  
+- Anti-abuse device tracking  
 
 ---
 
 ## 🧠 Purpose
 
-This project was built as a learning and experimental system to:
+This project was built as an experimental system to:
 
-* Understand communication systems
-* Improve backend architecture
-* Work with networking, DNS, and SSL certificates
-* Explore minimal interface design
+- learn communication systems  
+- improve backend architecture  
+- work with DNS / SSL / networking  
+- explore minimalist UI design  
 
 ---
 
 ## ⚠️ Notes
 
-* This is a minimalist project — modern UI features are intentionally excluded
-* Not production-ready yet
-* Some features (e.g. WebRTC for groups) are still in development
+- still a minimalist project (no GUI)  
+- not production-ready yet  
+- group WebRTC is still under development  
+
+---
+
+## 🔮 Next update (planned)
+
+In the next frontend update:
+
+- 🌍 UI language selection (multi-language support)
+  - PL / EN / DE and more  
+- 🔊 sound system updates:
+  - new notification sounds  
+  - assigning sounds to specific chats  
+  - customizable audio alerts  
 
 ---
 
 ## 📄 Status
 
-🚧 Alpha stage (1.0.0)
-✔️ Core functionality working
-⚠️ Further improvements required before beta
+🚧 Beta stage (1.0.0)  
+✔️ Core system stable  
+⚠️ Ongoing improvements  
 
 ---
 
@@ -124,8 +164,21 @@ chmod +x install.sh
 ./install.sh
 ```
 
----
-
 ## 📜 License
 
-(To be defined)
+This project is licensed under the GNU General Public License (GPL) — either version 3 of the License, or (at your option) any later version.
+
+Copyright (c) 2026 Boogeyman (TextCord)
+
+You are free to:
+- use this software
+- modify it
+- distribute it
+- use it commercially
+
+Under the condition that:
+- any distributed version must also remain open-source under the same license (GPL)
+- source code must be provided when distributing modified versions
+- the original author must be credited
+
+No warranty is provided. The software is provided "as is".
