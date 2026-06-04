@@ -75,6 +75,8 @@
             </div>
             <div class="chat-input-area">
                 <textarea id="message-input" placeholder="Type a message..." rows="1" onkeydown="handleInputKey(event)" oninput="autoResize(this)"></textarea>
+                <button class="btn" id="attach-btn" onclick="document.getElementById('attach-file').click()" title="Attach file (max 30 MB)">📎</button>
+                <input type="file" id="attach-file" style="display:none;" onchange="uploadAttachment(event)">
                 <button class="btn" onclick="sendMessage()">Send</button>
             </div>
         </div>
@@ -352,10 +354,10 @@ function loadGroupMessages() {
 function appendMessage(msg, isMine) {
     const container = document.getElementById('chat-messages');
     const div = document.createElement('div');
-    
+    const fileHtml = renderFileContent(msg.content);
     if (msg.is_system) {
         div.className = 'message system';
-        div.innerHTML = `<div class="message-content">${escapeHtml(msg.content)}</div>
+        div.innerHTML = `<div class="message-content">${fileHtml || escapeHtml(msg.content)}</div>
             <div class="message-meta"><span>${msg.created_at}</span></div>`;
     } else {
         div.className = `message ${isMine || msg.is_mine ? 'mine' : 'theirs'}`;
@@ -370,7 +372,7 @@ function appendMessage(msg, isMine) {
         div.innerHTML = `
             ${replyHtml}
             <div class="message-sender">${escapeHtml(msg.sender_name)}</div>
-            <div class="message-content">${escapeHtml(msg.content)}</div>
+            <div class="message-content">${fileHtml || escapeHtml(msg.content)}</div>
             <div class="message-meta">
                 <span>${msg.created_at}</span>
                 <span class="message-status ${statusClass}">${statusText}</span>
@@ -379,6 +381,49 @@ function appendMessage(msg, isMine) {
         `;
     }
     container.appendChild(div);
+}
+
+function renderFileContent(content) {
+    if (typeof content !== 'string' || !content.startsWith('[FILE]')) return null;
+    try {
+        const f = JSON.parse(content.slice(6));
+        const kb = (f.size/1024).toFixed(1);
+        const size = f.size > 1024*1024 ? (f.size/1024/1024).toFixed(2)+' MB' : kb+' KB';
+        return `<a href="/api/files/${encodeURIComponent(f.id)}" download="${escapeHtml(f.name)}" style="display:inline-block;padding:6px 10px;border:1px solid var(--border);text-decoration:none;color:inherit;">📎 ${escapeHtml(f.name)} <span style="color:var(--text-dim);font-size:11px;">(${size})</span></a>`;
+    } catch(e) { return null; }
+}
+
+async function uploadAttachment(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (file.size > 30*1024*1024) { alert('File exceeds 30 MB'); return; }
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!ext || ['exe','msi','com','scr','bat','cmd','vbs','ps1'].includes(ext)) {
+        alert('File type not allowed'); return;
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    if (currentGroupId) fd.append('group_id', currentGroupId);
+    else if (currentContactId) fd.append('receiver_id', currentContactId);
+    else { alert('Select a conversation first'); return; }
+    const btn = document.getElementById('attach-btn');
+    const old = btn.textContent; btn.textContent='…'; btn.disabled = true;
+    try {
+        const r = await fetch('/api/messages/upload', { method:'POST', body: fd });
+        const j = await r.json();
+        if (!j.ok) alert(j.error || 'Upload failed');
+        else {
+            // Optimistic local append
+            appendMessage({
+                id: j.id, content: '[FILE]'+JSON.stringify({id: j.id, name: file.name, size: file.size}),
+                is_mine: true, status: 'delivered', sender_name: 'You',
+                created_at: new Date().toISOString().replace('T',' ').substring(0,19)
+            }, true);
+            const cm = document.getElementById('chat-messages'); cm.scrollTop = cm.scrollHeight;
+        }
+    } catch(e) { alert('Upload error: '+e); }
+    finally { btn.textContent = old; btn.disabled = false; }
 }
 
 function showMsgMenu(event, msgId, isMine) {
@@ -1036,8 +1081,27 @@ async function ensureLocalStream() {
         callMicEnabled = false;
         return;
     }
-    callLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    callMicEnabled = true;
+    try {
+        callLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        callMicEnabled = true;
+    } catch (err) {
+        // No microphone / no permission / no devices → fall back to a silent track so the call still connects.
+        console.warn('Microphone unavailable, joining as receive-only:', err);
+        try {
+            const ac = new (window.AudioContext || window.webkitAudioContext)();
+            const dst = ac.createMediaStreamDestination();
+            const osc = ac.createOscillator();
+            const gain = ac.createGain();
+            gain.gain.value = 0; // muted
+            osc.connect(gain).connect(dst);
+            osc.start();
+            callLocalStream = dst.stream;
+        } catch (e2) {
+            callLocalStream = new MediaStream();
+        }
+        callMicEnabled = false;
+        try { setCallStatus('Microphone unavailable — receive-only'); } catch(_) {}
+    }
 }
 
 function createPeer() {

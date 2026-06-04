@@ -20,6 +20,9 @@
         <a href="/admin/reports" class="btn btn-full">Message Reports {% if pending_reports %}({{ pending_reports }}){% endif %}</a>
         <a href="/admin/create-user" class="btn btn-full">Create User Account</a>
         <button class="btn btn-full" onclick="openSystemMsg()">Send System Message</button>
+        {% if ALLOW_REGISTRATION_UI %}
+        <a href="/admin/devices" class="btn btn-full">Device Registrations</a>
+        {% endif %}
     </div>
 </div>
 

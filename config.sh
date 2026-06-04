@@ -27,7 +27,7 @@ server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
-    return 444;
+    return 301 https://${DOMAIN}\$request_uri;
 }
 
 server {

@@ -40,6 +40,7 @@ APP_HOST="127.0.0.1"
 SERVER_IP=$(hostname -I | awk '{print $1}')
 [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 BIND_IP="$SERVER_IP"
+DOMAIN=""
 USE_HSTS="no"
 
 echo -e "${GREEN}[*] Creating Python virtual environment...${NC}"
@@ -59,10 +60,13 @@ read -s -p "  Admin password: " ADMIN_PASS
 echo ""
 
 echo ""
-read -p "  Enter domain name (e.g. textcord.local): " DOMAIN
-while [ -z "$DOMAIN" ]; do
-    read -p "  Domain is required. Enter domain: " DOMAIN
+TLD=""
+while [ -z "$TLD" ]; do
+    read -p "  Domain TLD (e.g. local, pl, com, org): " TLD
+    TLD="${TLD#.}"  # strip leading dot if user typed .local
 done
+DOMAIN="textcord.${TLD}"
+echo -e "  Domain will be: ${GREEN}${DOMAIN}${NC}"
 
 echo ""
 echo "  Available network interfaces:"
@@ -77,8 +81,20 @@ fi
 echo ""
 echo -e "${YELLOW}  SSL CERTIFICATE${NC}"
 echo -e "${YELLOW}  [!] HSTS requires the CA certificate to be installed/trusted on clients.${NC}"
-read -p "  Use HSTS? [1=Yes / 2=No]: " HSTS_OPT
-[ "$HSTS_OPT" == "1" ] && USE_HSTS="yes"
+HSTS_OPT=""
+while [ "$HSTS_OPT" != "1" ] && [ "$HSTS_OPT" != "2" ]; do
+    read -p "  Use HSTS? [1=Yes / 2=No]: " HSTS_OPT
+done
+[ "$HSTS_OPT" == "1" ] && USE_HSTS="yes" || USE_HSTS="no"
+
+echo ""
+ALLOW_REG_OPT=""
+while [ "$ALLOW_REG_OPT" != "1" ] && [ "$ALLOW_REG_OPT" != "2" ]; do
+    read -p "  Allow users to self-register accounts? [1=Yes / 2=No]: " ALLOW_REG_OPT
+done
+[ "$ALLOW_REG_OPT" == "1" ] && ALLOW_REGISTRATION="yes" || ALLOW_REGISTRATION="no"
+
+
 
 create_start_script() {
     cat > "${INSTALL_DIR}/start.sh" << STARTEOF
@@ -97,20 +113,19 @@ STARTEOF
 
 write_ssl_nginx() {
     local hsts_line=""
+    local mtls_lines=""
     if [ "$USE_HSTS" == "yes" ]; then
         hsts_line='    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;'
+        mtls_lines="    ssl_client_certificate ${CERT_DIR}/ca.crt;
+    ssl_verify_client on;
+    ssl_verify_depth 2;"
     fi
-
-    # HTTPS-only: no plain HTTP service. Port 80 closed off via return 444.
     sudo tee /etc/nginx/sites-available/textcord > /dev/null << NGINXEOF
-# TextCord HTTPS-only configuration
-# All HTTP traffic is dropped. HSTS: ${USE_HSTS}
-
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
-    return 444;
+    return 301 https://${DOMAIN}\$request_uri;
 }
 
 server {
@@ -126,14 +141,12 @@ server {
     ssl_session_cache shared:SSL:50m;
     ssl_session_timeout 1d;
     ssl_session_tickets on;
-    ssl_buffer_size 4k;
+${mtls_lines}
 
-    # Performance
     keepalive_timeout 75s;
     keepalive_requests 1000;
     client_max_body_size 50m;
 
-    # Compression
     gzip on;
     gzip_vary on;
     gzip_proxied any;
@@ -143,13 +156,11 @@ server {
 
 ${hsts_line}
 
-    # Static asset caching (served by Flask but cached by browser)
     location /static/ {
         proxy_pass http://127.0.0.1:${PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_cache_valid 200 1h;
         expires 7d;
         add_header Cache-Control "public, max-age=604800, immutable";
 ${hsts_line}
@@ -188,12 +199,8 @@ NGINXEOF
 apply_nginx() {
     sudo ln -sf /etc/nginx/sites-available/textcord /etc/nginx/sites-enabled/textcord
     sudo rm -f /etc/nginx/sites-enabled/default
-    if sudo nginx -t 2>&1; then
-        sudo systemctl restart nginx
-        sudo systemctl enable nginx >/dev/null 2>&1 || true
-    else
-        echo -e "${RED}[!] NGINX config test failed!${NC}"
-    fi
+    sudo nginx -t && sudo systemctl restart nginx
+    sudo systemctl enable nginx >/dev/null 2>&1 || true
 }
 
 setup_dns() {
@@ -280,6 +287,36 @@ CLIENT_CERT_PATH="${HOME}/textcord_ca_${DOMAIN}.crt"
 cp "${CERT_DIR}/ca.crt" "${CLIENT_CERT_PATH}"
 chmod 644 "${CLIENT_CERT_PATH}"
 
+# Persist HSTS choice for config.sh
+echo "USE_HSTS=${USE_HSTS}" | sudo tee /etc/textcord.conf > /dev/null
+echo "DOMAIN=${DOMAIN}" | sudo tee -a /etc/textcord.conf > /dev/null
+echo "ALLOW_REGISTRATION=${ALLOW_REGISTRATION}" | sudo tee -a /etc/textcord.conf > /dev/null
+
+# When HSTS is enabled, also issue a CLIENT certificate for mTLS.
+# Without this client cert, NGINX rejects the TLS handshake -> page is unreachable.
+CLIENT_P12_PATH=""
+if [ "$USE_HSTS" == "yes" ]; then
+    echo -e "${GREEN}[*] Generating client certificate (mTLS) for authorized access...${NC}"
+    CLIENT_PASS=$(python3 -c "import secrets; print(secrets.token_urlsafe(12))")
+    openssl genrsa -out "${CERT_DIR}/client.key" 2048 2>/dev/null
+    openssl req -new -key "${CERT_DIR}/client.key" -out "${CERT_DIR}/client.csr" \
+        -subj "/C=PL/O=TextCord/CN=textcord-authorized-client" 2>/dev/null
+    openssl x509 -req -days 3650 -in "${CERT_DIR}/client.csr" \
+        -CA "${CERT_DIR}/ca.crt" -CAkey "${CERT_DIR}/ca.key" -CAcreateserial \
+        -out "${CERT_DIR}/client.crt" 2>/dev/null
+    CLIENT_P12_PATH="${HOME}/textcord_client_${DOMAIN}.p12"
+    openssl pkcs12 -export \
+        -inkey "${CERT_DIR}/client.key" \
+        -in "${CERT_DIR}/client.crt" \
+        -certfile "${CERT_DIR}/ca.crt" \
+        -name "TextCord ${DOMAIN}" \
+        -out "${CLIENT_P12_PATH}" \
+        -passout "pass:${CLIENT_PASS}" 2>/dev/null
+    chmod 600 "${CLIENT_P12_PATH}"
+    echo "${CLIENT_PASS}" > "${HOME}/textcord_client_${DOMAIN}.p12.password"
+    chmod 600 "${HOME}/textcord_client_${DOMAIN}.p12.password"
+fi
+
 write_ssl_nginx
 apply_nginx
 setup_dns
@@ -290,15 +327,22 @@ echo -e "${GREEN}  TextCord installed successfully!${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 echo -e "  Start the service:  ${YELLOW}./start.sh${NC}"
-echo -e "  Access:             ${YELLOW}https://${DOMAIN}${NC}"
-echo -e "  HTTP:               ${RED}blocked${NC}"
+echo -e "  Access:  ${YELLOW}https://${DOMAIN}${NC}"
+echo -e "  HSTS:    ${YELLOW}${USE_HSTS}${NC}"
+echo -e "  HTTP:    ${YELLOW}auto-redirect to HTTPS${NC}"
+echo -e "  CA Certificate:  ${YELLOW}${CLIENT_CERT_PATH}${NC}"
 if [ "$USE_HSTS" == "yes" ]; then
-    echo -e "  HSTS:               ${GREEN}enabled${NC}"
-else
-    echo -e "  HSTS:               ${YELLOW}disabled${NC}"
+    echo ""
+    echo -e "${RED}  === MANDATORY CLIENT AUTHENTICATION (mTLS) ===${NC}"
+    echo -e "  HSTS=yes enables mTLS: WITHOUT the client certificate,"
+    echo -e "  the browser CANNOT connect at all (TLS handshake refused)."
+    echo -e "  Client cert (.p12):     ${YELLOW}${CLIENT_P12_PATH}${NC}"
+    echo -e "  Import password file:   ${YELLOW}${HOME}/textcord_client_${DOMAIN}.p12.password${NC}"
+    echo -e "  Import the .p12 into your browser:"
+    echo -e "    Chrome/Edge: Settings -> Privacy -> Security -> Manage certificates -> Your certificates -> Import"
+    echo -e "    Firefox:     Settings -> Privacy -> View Certificates -> Your Certificates -> Import"
+    echo -e "  Distribute this .p12 ONLY to authorized users."
 fi
-echo -e "  CA Certificate:     ${YELLOW}${CLIENT_CERT_PATH}${NC}"
-echo -e "  ${YELLOW}Import the CA in your browser/OS as Trusted Root CA${NC}"
-echo -e "  DNS Server:         ${YELLOW}Set client DNS to ${BIND_IP}${NC}"
-echo -e "  Admin panel:        ${YELLOW}/adminpage${NC}"
+echo -e "  DNS Server:  ${YELLOW}Set client DNS to ${BIND_IP}${NC}"
+echo -e "  Admin panel:  ${YELLOW}/adminpage${NC}"
 echo ""

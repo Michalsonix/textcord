@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:20px;">
+    <div class="topbar" style="border:none;padding:0;margin-bottom:20px;">
+        <a href="/adminpage" class="btn">← Back</a>
+        <a href="/logout" class="btn">Logout</a>
+    </div>
+    <h1 style="text-transform:uppercase;letter-spacing:4px;margin-bottom:20px;">Device Registrations</h1>
+    <p style="color:var(--text-dim);font-size:12px;margin-bottom:20px;">Devices (MAC address on LAN, browser fingerprint elsewhere) that created self-registered accounts.</p>
+
+    <div style="display:grid;grid-template-columns:300px 1fr;gap:20px;">
+        <div>
+            <h3 style="margin-bottom:10px;">Devices ({{ devices|length }})</h3>
+            <div style="border:1px solid var(--border);max-height:70vh;overflow:auto;">
+                {% for d in devices %}
+                <div class="device-row" data-key="{{ d.key }}" onclick="loadDevice('{{ d.key }}')"
+                     style="padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-family:monospace;font-size:12px;">
+                    <div>{{ d.key }}</div>
+                    <div style="color:var(--text-dim);font-size:10px;">{{ 'MAC' if d.is_mac else 'fingerprint' }} · {{ d.count }} account{{ 's' if d.count != 1 else '' }}</div>
+                </div>
+                {% else %}
+                <div style="padding:15px;color:var(--text-dim);">No registrations yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+        <div>
+            <h3 style="margin-bottom:10px;">Detail</h3>
+            <div id="device-detail" style="border:1px solid var(--border);padding:15px;min-height:200px;">
+                <p style="color:var(--text-dim);">Select a device on the left.</p>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+let currentKey = null;
+async function loadDevice(key) {
+    currentKey = key;
+    const r = await fetch('/api/admin/devices/' + encodeURIComponent(key));
+    const d = await r.json();
+    let html = '<div style="margin-bottom:10px;font-family:monospace;font-size:12px;color:var(--text-dim);">' + d.key + ' · ' + d.count + ' account(s)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+    html += '<tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:5px;">Identifier</th><th style="text-align:left;padding:5px;">Name</th><th style="text-align:left;padding:5px;">IP</th><th style="text-align:left;padding:5px;">Created</th></tr>';
+    for (const a of d.accounts) {
+        html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:5px;">' + a.identifier + '</td><td style="padding:5px;">' + a.name + '</td><td style="padding:5px;">' + (a.ip||'') + '</td><td style="padding:5px;">' + a.created_at + '</td></tr>';
+    }
+    html += '</table>';
+    html += '<div style="margin-top:15px;"><button class="btn btn-warning" onclick="resetDevice()">Reset registration count for this device</button></div>';
+    document.getElementById('device-detail').innerHTML = html;
+}
+async function resetDevice() {
+    if (!currentKey) return;
+    if (!confirm('Reset registration count? Users created from this device remain.')) return;
+    await fetch('/api/admin/devices/' + encodeURIComponent(currentKey) + '/reset', {method:'POST'});
+    location.reload();
+}
+</script>
+{% endblock %}
