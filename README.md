@@ -162,7 +162,7 @@ git clone https://github.com/Michalsonix/textcord.git
 cd textcord
 chmod +x install.sh
 ./install.sh
-
+```
 
 ## 📜 License
 
