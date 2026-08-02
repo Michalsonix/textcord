@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width:680px;margin:60px auto;padding:0 16px;font-family:ui-monospace,Menlo,monospace;color:var(--text,#ddd);text-align:center;">
+  <h1 style="font-size:20px;letter-spacing:3px;">Allow self-registration?</h1>
+  <p style="color:#999;margin-bottom:30px;">Users will be able to create their own accounts on the login page.</p>
+  <form method="POST" style="display:flex;gap:20px;justify-content:center;">
+    <button type="submit" name="allow_registration" value="yes"
+      style="flex:1;max-width:200px;padding:18px;background:#1a2a1a;color:#9f9;border:1px solid #4a8a4a;cursor:pointer;font-size:16px;letter-spacing:4px;">YES</button>
+    <button type="submit" name="allow_registration" value="no"
+      style="flex:1;max-width:200px;padding:18px;background:#2a1a1a;color:#f99;border:1px solid #8a4a4a;cursor:pointer;font-size:16px;letter-spacing:4px;">NO</button>
+  </form>
+</div>
+{% endblock %}

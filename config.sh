@@ -127,6 +127,13 @@ show_menu() {
     fi
     echo "    4. Service Status"
     echo "    5. Restart Service"
+    if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+        echo -e "   10. Stop Service        ${GREEN}[running]${NC}"
+        echo -e "   11. Start Service       ${GREEN}[running]${NC}"
+    else
+        echo -e "   10. Stop Service        ${RED}[stopped]${NC}"
+        echo -e "   11. Start Service       ${RED}[stopped]${NC}"
+    fi
     echo ""
     echo -e "  ${BOLD}── Administration ──${NC}"
     echo "    6. Change Admin Password"
@@ -287,10 +294,10 @@ SANEOF
     cp "${CERT_DIR}/ca.crt" "${CLIENT_CERT_PATH}"
     chmod 644 "${CLIENT_CERT_PATH}"
 
-    # Detect HSTS state from current nginx vhost
+    # Read HSTS state from persistent config
     USE_HSTS="no"
-    if grep -q "Strict-Transport-Security" /etc/nginx/sites-available/textcord 2>/dev/null; then
-        USE_HSTS="yes"
+    if [ -f /etc/textcord.conf ]; then
+        USE_HSTS=$(grep -oP '^USE_HSTS=\K\S+' /etc/textcord.conf 2>/dev/null || echo "no")
     fi
     rewrite_nginx_vhost
     sudo nginx -t 2>&1 && sudo systemctl reload nginx 2>/dev/null
@@ -327,11 +334,12 @@ After=network.target
 Type=simple
 User=$(whoami)
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=/bin/bash ${INSTALL_DIR}/start.sh
-StandardOutput=journal
-StandardError=journal
-Restart=on-failure
+ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/app.py
+Restart=always
 RestartSec=5
+Environment=SECRET_KEY=$(grep -oP "SECRET_KEY=\"\K[^\"]*" "${INSTALL_DIR}/start.sh" 2>/dev/null || echo "$(python3 -c 'import secrets;print(secrets.token_hex(32))')")
+Environment=TEXTCORD_HOST=127.0.0.1
+Environment=TEXTCORD_PORT=5000
 
 [Install]
 WantedBy=multi-user.target
@@ -441,6 +449,37 @@ restart_service() {
     echo -e "${GREEN}  Service restarted.${NC}"
     sleep 2
     systemctl status ${SERVICE_NAME} --no-pager -l | head -10
+    echo ""
+    read -p "  Press Enter to continue..."
+}
+
+start_service() {
+    show_header
+    echo -e "${BOLD}  Start Service${NC}"
+    echo ""
+    sudo systemctl start ${SERVICE_NAME}
+    sleep 1
+    if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+        echo -e "${GREEN}  Service started.${NC}"
+    else
+        echo -e "${RED}  Failed to start service.${NC}"
+        systemctl status ${SERVICE_NAME} --no-pager -l | head -10
+    fi
+    echo ""
+    read -p "  Press Enter to continue..."
+}
+
+stop_service() {
+    show_header
+    echo -e "${BOLD}  Stop Service${NC}"
+    echo ""
+    sudo systemctl stop ${SERVICE_NAME}
+    sleep 1
+    if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+        echo -e "${RED}  Service is still running.${NC}"
+    else
+        echo -e "${GREEN}  Service stopped.${NC}"
+    fi
     echo ""
     read -p "  Press Enter to continue..."
 }
@@ -617,6 +656,8 @@ while true; do
         7) manage_account "unlock" ;;
         8) manage_account "lock" ;;
         9) factory_reset ;;
+        10) stop_service ;;
+        11) start_service ;;
         0) echo "Goodbye!"; exit 0 ;;
         *) echo -e "${RED}  Invalid option${NC}"; sleep 1 ;;
     esac

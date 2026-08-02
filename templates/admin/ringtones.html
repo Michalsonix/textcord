@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:20px;">
+    <div class="topbar" style="border:none;padding:0;margin-bottom:20px;">
+        <a href="/adminpage" class="btn">← Admin Dashboard</a>
+        <a href="/messages" class="btn" data-i18n="nav.messages">Go to Messages</a>
+    </div>
+    <h1 data-i18n="ringtones.title" style="text-transform:uppercase;letter-spacing:4px;margin-bottom:20px;">Ringtones</h1>
+
+    {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+    {% if msg %}<div class="success-msg" style="color:#2ecc71;margin-bottom:10px;">{{ msg }}</div>{% endif %}
+
+    <form method="POST" enctype="multipart/form-data" action="/admin/ringtones/upload" style="margin-bottom:20px;border:1px solid var(--border);padding:12px;">
+        <label data-i18n="ringtones.upload" style="color:var(--text-dim);font-size:12px;">Upload (MP3/WAV, max 30s)</label>
+        <input type="file" name="file" accept="audio/mpeg,audio/wav,.mp3,.wav" required style="margin-top:8px;">
+        <button type="submit" class="btn btn-success" style="margin-top:10px;">Upload</button>
+    </form>
+
+    <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid var(--border);">
+            <th style="text-align:left;padding:6px;">Name</th>
+            <th style="text-align:right;padding:6px;">Actions</th>
+        </tr></thead>
+        <tbody>
+            <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px;">
+                    <span data-i18n="ringtones.builtin">Built-in Beep</span>
+                    {% if default == '' %}<span style="color:#2ecc71;margin-left:8px;" data-i18n="ringtones.default">(default)</span>{% endif %}
+                </td>
+                <td style="text-align:right;padding:6px;">
+                    <form method="POST" action="/admin/ringtones/set-default" style="display:inline;">
+                        <input type="hidden" name="name" value="">
+                        <button class="btn" data-i18n="ringtones.set_default">Set Default</button>
+                    </form>
+                </td>
+            </tr>
+            {% for r in ringtones %}
+            <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px;">
+                    {{ r }}
+                    {% if r == default %}<span style="color:#2ecc71;margin-left:8px;" data-i18n="ringtones.default">(default)</span>{% endif %}
+                </td>
+                <td style="text-align:right;padding:6px;">
+                    <button class="btn" onclick="testRingtone('{{ r }}')" data-i18n="ringtones.test">Test</button>
+                    <form method="POST" action="/admin/ringtones/set-default" style="display:inline;">
+                        <input type="hidden" name="name" value="{{ r }}">
+                        <button class="btn" data-i18n="ringtones.set_default">Set Default</button>
+                    </form>
+                    <form method="POST" action="/admin/ringtones/delete" style="display:inline;" onsubmit="return confirm('Delete?');">
+                        <input type="hidden" name="name" value="{{ r }}">
+                        <button class="btn btn-danger" data-i18n="ringtones.delete">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<audio id="test-audio" style="display:none;"></audio>
+<script>
+function testRingtone(name){
+  const a = document.getElementById('test-audio');
+  a.src = '/static/ringtones/' + encodeURIComponent(name);
+  a.play().catch(e => alert('Playback error: '+e.message));
+}
+</script>
+{% endblock %}

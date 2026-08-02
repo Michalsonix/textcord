@@ -820,3 +820,23 @@ a:hover { text-decoration: underline; }
 .call-circle-btn.decline { background: #7a1f1f; border-color: #e74c3c; }
 .call-circle-btn.mic-btn { background: #222; }
 .call-circle-btn svg { stroke: #fff; }
+
+/* ===== Mobile responsive (Package 3) ===== */
+@media (max-width: 768px) {
+  .app-layout { flex-direction: column; height: 100vh; height: 100dvh; }
+  .sidebar { width: 100% !important; max-width: 100%; height: 45vh; min-height: 220px; border-right: none; border-bottom: 1px solid var(--border); }
+  .chat-area { width: 100%; height: 55vh; }
+  body.chat-open .sidebar { display: none; }
+  body.chat-open .chat-area { height: 100vh; height: 100dvh; }
+  body.chat-open #mobile-back-btn { display: inline-flex !important; }
+  .btn, button { min-height: 40px; }
+  .call-circle-btn { min-width: 56px; min-height: 56px; }
+  .modal { max-width: 95vw !important; width: 95vw; }
+  .topbar { flex-wrap: wrap; gap: 6px; padding: 6px; }
+  .chat-input-area textarea { font-size: 16px; } /* avoid iOS zoom */
+  #lang-switcher { top: 4px !important; right: 4px !important; }
+}
+@media (max-width: 480px) {
+  .sidebar-header { font-size: 9px; }
+  .admin-stats { grid-template-columns: 1fr 1fr !important; }
+}

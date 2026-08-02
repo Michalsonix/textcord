@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<script>window.CUSTOM_RINGTONE_URL = {{ ringtone_url|tojson if ringtone_url else 'null' }};</script>
 <div class="app-layout">
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -11,8 +12,8 @@
                                |___/
         </div>
         <div class="sidebar-tabs">
-            <button class="sidebar-tab active" onclick="switchTab('messages')" id="tab-messages">Messages</button>
-            <button class="sidebar-tab" onclick="switchTab('groups')" id="tab-groups">Groups</button>
+            <button class="sidebar-tab active" onclick="switchTab('messages')" id="tab-messages" data-i18n="sb.messages">Messages</button>
+            <button class="sidebar-tab" onclick="switchTab('groups')" id="tab-groups" data-i18n="sb.groups">Groups</button>
         </div>
         <div class="sidebar-contacts" id="contacts-list" style="display:block;">
             {% for c in contacts %}
@@ -33,7 +34,7 @@
         </div>
         <div class="sidebar-contacts" id="groups-list" style="display:none;">
             <div style="padding:10px;">
-                <button class="btn btn-full" onclick="openCreateGroupModal()">+ Create Group</button>
+                <button class="btn btn-full" onclick="openCreateGroupModal()" data-i18n="sb.create_group">+ Create Group</button>
             </div>
             {% for g in groups %}
             <div class="contact-item group-item" data-group-id="{{ g.group.id }}" onclick="selectGroup('{{ g.group.id }}')">
@@ -49,21 +50,26 @@
     <div class="chat-area" id="chat-area">
         <div class="topbar">
             {% if is_admin %}
-            <a href="/adminpage">Admin Dashboard</a>
+            <a href="/adminpage" data-i18n="nav.admin">Admin Dashboard</a>
             {% endif %}
-            <a href="/logout">Logout</a>
-            <a href="/account">Account Settings</a>
+            <a href="/logout" data-i18n="nav.logout">Logout</a>
+            <a href="/account" data-i18n="nav.account">Account Settings</a>
         </div>
-        <div class="no-chat-selected" id="no-chat">
+        <div class="no-chat-selected" id="no-chat" data-i18n="chat.select">
             Select a contact or group to start chatting
         </div>
         <div class="hidden" id="chat-container" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
             <div class="chat-header">
+                <button class="btn mobile-back-btn" id="mobile-back-btn" onclick="closeChatMobile()" title="Back" style="display:none;margin-right:8px;">←</button>
                 <span class="chat-header-name" id="chat-header-name"></span>
                 <div class="chat-header-actions">
                     <button class="btn call-btn hidden" id="call-btn" onclick="onCallButtonClick()" title="Call user" style="position:relative;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
                         <span id="incoming-call-indicator" class="incoming-call-indicator hidden" title="Incoming call"></span>
+                    </button>
+                    <button class="btn call-btn hidden" id="group-call-btn" onclick="onGroupCallButtonClick()" title="Group call" style="position:relative;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0z"/><path d="M3 21v-1a5 5 0 0 1 5-5h10a5 5 0 0 1 5 5v1"/></svg>
+                        <span id="group-call-active-dot" class="incoming-call-indicator hidden" title="Call in progress"></span>
                     </button>
                     <button class="btn" onclick="openChatSettings()" title="Chat Settings">⚙</button>
                 </div>
@@ -74,10 +80,8 @@
                 <button onclick="cancelReply()" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-family:inherit;">✕</button>
             </div>
             <div class="chat-input-area">
-                <textarea id="message-input" placeholder="Type a message..." rows="1" onkeydown="handleInputKey(event)" oninput="autoResize(this)"></textarea>
-                <button class="btn" id="attach-btn" onclick="document.getElementById('attach-file').click()" title="Attach file (max 30 MB)">📎</button>
-                <input type="file" id="attach-file" style="display:none;" onchange="uploadAttachment(event)">
-                <button class="btn" onclick="sendMessage()">Send</button>
+                <textarea id="message-input" data-i18n-placeholder="chat.placeholder" placeholder="Type a message..." rows="1" onkeydown="handleInputKey(event)" oninput="autoResize(this)"></textarea>
+                <button class="btn" onclick="sendMessage()" data-i18n="chat.send">Send</button>
             </div>
         </div>
     </div>
@@ -87,14 +91,14 @@
 <div class="modal-overlay hidden" id="chat-settings-modal">
     <div class="modal">
         <button class="modal-close" onclick="closeChatSettings()">✕</button>
-        <h2>Chat Settings</h2>
-        <button class="btn btn-full btn-danger" style="margin-bottom:10px;" onclick="deleteChatHistory()">Delete Chat History (yours only)</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" id="block-btn" onclick="toggleBlock()">Block User</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-btn" onclick="toggleMute()">Mute User</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-calls-btn" onclick="toggleMuteCalls()">Mute Calls</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openRenameModal()">Rename User</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openSearchModal()">Search in Conversation</button>
-        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openCreateGroupFromChat()">Create Group</button>
+        <h2 data-i18n="chat.settings">Chat Settings</h2>
+        <button class="btn btn-full btn-danger" style="margin-bottom:10px;" onclick="deleteChatHistory()" data-i18n="chat.delete_history">Delete Chat History (yours only)</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="block-btn" onclick="toggleBlock()" data-i18n="chat.block">Block User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-btn" onclick="toggleMute()" data-i18n="chat.mute">Mute User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" id="mute-calls-btn" onclick="toggleMuteCalls()" data-i18n="chat.mute_calls">Mute Calls</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openRenameModal()" data-i18n="chat.rename">Rename User</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openSearchModal()" data-i18n="chat.search">Search in Conversation</button>
+        <button class="btn btn-full" style="margin-bottom:10px;" onclick="openCreateGroupFromChat()" data-i18n="chat.create_group">Create Group</button>
     </div>
 </div>
 
@@ -156,7 +160,7 @@
 <!-- Incoming Call Modal -->
 <div class="modal-overlay hidden" id="incoming-call-modal" style="z-index:1000;">
     <div class="modal" style="text-align:center;max-width:400px;">
-        <h2 style="margin-bottom:8px;">Dzwoni do ciebie:</h2>
+        <h2 style="margin-bottom:8px;" data-i18n="chat.incoming">Incoming call:</h2>
         <div id="incoming-caller-name" style="font-size:18px;margin-bottom:20px;color:var(--text);"></div>
         <div style="display:flex;justify-content:center;gap:30px;">
             <button class="call-circle-btn accept" onclick="acceptIncomingCall()" title="Accept">
@@ -189,6 +193,42 @@
     </div>
 </div>
 <audio id="remote-audio" autoplay></audio>
+
+<!-- Group Call Window -->
+<div class="modal-overlay hidden" id="group-call-window" style="z-index:998;">
+    <div class="call-modal" style="max-width:680px;width:90%;">
+        <button class="modal-close" onclick="hideGroupCallWindow()" title="Hide window">_</button>
+        <pre class="call-name" id="group-call-title" style="margin-bottom:6px;">GROUP CALL</pre>
+        <div class="call-status" id="group-call-status">Connecting...</div>
+        <div id="group-call-tiles" style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:18px 0;"></div>
+        <div class="call-controls">
+            <button class="call-circle-btn mic-btn" id="group-mic-btn" onclick="toggleGroupCallMic()" title="Toggle microphone">
+                <svg id="group-mic-icon-on" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                <svg id="group-mic-icon-off" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <button class="call-circle-btn decline" onclick="leaveGroupCall()" title="Leave call">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg);"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+<div id="group-call-audio-sinks" style="display:none;"></div>
+
+<!-- Incoming Group Call Banner -->
+<div class="modal-overlay hidden" id="group-call-incoming-modal" style="z-index:1001;">
+    <div class="modal" style="max-width:420px;">
+        <h2 style="margin-bottom:8px;">Incoming group call</h2>
+        <div id="group-call-incoming-text" style="font-size:16px;margin-bottom:16px;color:var(--text);"></div>
+        <div style="display:flex;gap:10px;justify-content:center;">
+            <button class="call-circle-btn accept" onclick="acceptIncomingGroupCall()" title="Join">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+            <button class="call-circle-btn decline" onclick="dismissIncomingGroupCall()" title="Dismiss">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg);"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -267,6 +307,7 @@ function selectContact(userId) {
     chatMode = 'dm';
     currentContactId = userId;
     currentGroupId = null;
+    document.body.classList.add('chat-open');
     document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
     const el = document.querySelector(`[data-user-id="${userId}"]`);
     if (el) el.classList.add('active');
@@ -302,6 +343,7 @@ function selectGroup(groupId) {
     chatMode = 'group';
     currentGroupId = groupId;
     currentContactId = null;
+    document.body.classList.add('chat-open');
     document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
     const el = document.querySelector(`[data-group-id="${groupId}"]`);
     if (el) el.classList.add('active');
@@ -354,10 +396,10 @@ function loadGroupMessages() {
 function appendMessage(msg, isMine) {
     const container = document.getElementById('chat-messages');
     const div = document.createElement('div');
-    const fileHtml = renderFileContent(msg.content);
+    
     if (msg.is_system) {
         div.className = 'message system';
-        div.innerHTML = `<div class="message-content">${fileHtml || escapeHtml(msg.content)}</div>
+        div.innerHTML = `<div class="message-content">${escapeHtml(msg.content)}</div>
             <div class="message-meta"><span>${msg.created_at}</span></div>`;
     } else {
         div.className = `message ${isMine || msg.is_mine ? 'mine' : 'theirs'}`;
@@ -372,7 +414,7 @@ function appendMessage(msg, isMine) {
         div.innerHTML = `
             ${replyHtml}
             <div class="message-sender">${escapeHtml(msg.sender_name)}</div>
-            <div class="message-content">${fileHtml || escapeHtml(msg.content)}</div>
+            <div class="message-content">${escapeHtml(msg.content)}</div>
             <div class="message-meta">
                 <span>${msg.created_at}</span>
                 <span class="message-status ${statusClass}">${statusText}</span>
@@ -381,49 +423,6 @@ function appendMessage(msg, isMine) {
         `;
     }
     container.appendChild(div);
-}
-
-function renderFileContent(content) {
-    if (typeof content !== 'string' || !content.startsWith('[FILE]')) return null;
-    try {
-        const f = JSON.parse(content.slice(6));
-        const kb = (f.size/1024).toFixed(1);
-        const size = f.size > 1024*1024 ? (f.size/1024/1024).toFixed(2)+' MB' : kb+' KB';
-        return `<a href="/api/files/${encodeURIComponent(f.id)}" download="${escapeHtml(f.name)}" style="display:inline-block;padding:6px 10px;border:1px solid var(--border);text-decoration:none;color:inherit;">📎 ${escapeHtml(f.name)} <span style="color:var(--text-dim);font-size:11px;">(${size})</span></a>`;
-    } catch(e) { return null; }
-}
-
-async function uploadAttachment(ev) {
-    const file = ev.target.files && ev.target.files[0];
-    ev.target.value = '';
-    if (!file) return;
-    if (file.size > 30*1024*1024) { alert('File exceeds 30 MB'); return; }
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    if (!ext || ['exe','msi','com','scr','bat','cmd','vbs','ps1'].includes(ext)) {
-        alert('File type not allowed'); return;
-    }
-    const fd = new FormData();
-    fd.append('file', file);
-    if (currentGroupId) fd.append('group_id', currentGroupId);
-    else if (currentContactId) fd.append('receiver_id', currentContactId);
-    else { alert('Select a conversation first'); return; }
-    const btn = document.getElementById('attach-btn');
-    const old = btn.textContent; btn.textContent='…'; btn.disabled = true;
-    try {
-        const r = await fetch('/api/messages/upload', { method:'POST', body: fd });
-        const j = await r.json();
-        if (!j.ok) alert(j.error || 'Upload failed');
-        else {
-            // Optimistic local append
-            appendMessage({
-                id: j.id, content: '[FILE]'+JSON.stringify({id: j.id, name: file.name, size: file.size}),
-                is_mine: true, status: 'delivered', sender_name: 'You',
-                created_at: new Date().toISOString().replace('T',' ').substring(0,19)
-            }, true);
-            const cm = document.getElementById('chat-messages'); cm.scrollTop = cm.scrollHeight;
-        }
-    } catch(e) { alert('Upload error: '+e); }
-    finally { btn.textContent = old; btn.disabled = false; }
 }
 
 function showMsgMenu(event, msgId, isMine) {
@@ -550,6 +549,13 @@ function openChatSettings() {
     document.getElementById('chat-settings-modal').classList.remove('hidden');
 }
 function closeChatSettings() { document.getElementById('chat-settings-modal').classList.add('hidden'); }
+function closeChatMobile(){
+    document.body.classList.remove('chat-open');
+    currentContactId = null; currentGroupId = null;
+    const cc = document.getElementById('chat-container'); if (cc) cc.style.display='none';
+    const nc = document.getElementById('no-chat'); if (nc) nc.style.display='';
+    document.querySelectorAll('.contact-item.active').forEach(el=>el.classList.remove('active'));
+}
 
 function deleteChatHistory() {
     if (!confirm('Delete your chat history with this user?')) return;
@@ -962,6 +968,16 @@ function asciiText(text) {
 // ─── Ringtone via Web Audio (no copyright, no file needed) ───
 function startRingtone() {
     stopRingtone();
+    // Custom ringtone (admin-uploaded) takes priority if set
+    if (window.CUSTOM_RINGTONE_URL) {
+        try {
+            const a = new Audio(window.CUSTOM_RINGTONE_URL);
+            a.loop = true;
+            a.play().catch(()=>{});
+            ringtoneNodes = { stopped:false, audio:a };
+            return;
+        } catch(e) { /* fall through to beep */ }
+    }
     try {
         ringtoneCtx = new (window.AudioContext || window.webkitAudioContext)();
         const ctx = ringtoneCtx;
@@ -988,7 +1004,10 @@ function startRingtone() {
     } catch(e) { console.warn('ringtone failed', e); }
 }
 function stopRingtone() {
-    if (ringtoneNodes) ringtoneNodes.stopped = true;
+    if (ringtoneNodes) {
+        ringtoneNodes.stopped = true;
+        if (ringtoneNodes.audio) { try { ringtoneNodes.audio.pause(); ringtoneNodes.audio.src=''; } catch(e){} }
+    }
     if (ringtoneCtx) { try { ringtoneCtx.close(); } catch(e) {} ringtoneCtx = null; }
     ringtoneNodes = null;
 }
@@ -1011,6 +1030,17 @@ const _origSelectGroup = selectGroup;
 selectGroup = function(gid) {
     _origSelectGroup(gid);
     document.getElementById('call-btn')?.classList.add('hidden');
+    // Show group call button; hide DM call button
+    const gcBtn = document.getElementById('group-call-btn');
+    if (gcBtn) gcBtn.classList.remove('hidden');
+    // Ask server for current call state of this group
+    try { socket.emit('group_call_query', { group_id: gid }); } catch(e) {}
+};
+// When switching back to DM, hide group call button
+const _origSelectContact2 = selectContact;
+selectContact = function(userId) {
+    _origSelectContact2(userId);
+    document.getElementById('group-call-btn')?.classList.add('hidden');
 };
 
 function updateIncomingIndicator() {
@@ -1081,27 +1111,8 @@ async function ensureLocalStream() {
         callMicEnabled = false;
         return;
     }
-    try {
-        callLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        callMicEnabled = true;
-    } catch (err) {
-        // No microphone / no permission / no devices → fall back to a silent track so the call still connects.
-        console.warn('Microphone unavailable, joining as receive-only:', err);
-        try {
-            const ac = new (window.AudioContext || window.webkitAudioContext)();
-            const dst = ac.createMediaStreamDestination();
-            const osc = ac.createOscillator();
-            const gain = ac.createGain();
-            gain.gain.value = 0; // muted
-            osc.connect(gain).connect(dst);
-            osc.start();
-            callLocalStream = dst.stream;
-        } catch (e2) {
-            callLocalStream = new MediaStream();
-        }
-        callMicEnabled = false;
-        try { setCallStatus('Microphone unavailable — receive-only'); } catch(_) {}
-    }
+    callLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    callMicEnabled = true;
 }
 
 function createPeer() {
@@ -1402,5 +1413,294 @@ openChatSettings = function() {
     }
     _origOpenChatSettings();
 };
+
+// ─── Group calls (WebRTC mesh) ──────────────────────────────────────
+const groupCallPeers = {};         // user_id -> RTCPeerConnection
+const groupCallAudio = {};         // user_id -> <audio> element
+let groupCallLocalStream = null;
+let groupCallMicEnabled = true;
+let groupCallActiveGid = null;     // group id we are joined into (audio + mesh)
+let groupCallActiveCallId = null;
+const groupCallStateByGroup = {};  // group_id -> {active, participants:[]}
+let pendingIncomingGroupCall = null;
+
+function setGroupCallStatus(t) {
+    const el = document.getElementById('group-call-status');
+    if (el) el.textContent = t;
+}
+function showGroupCallWindow() { document.getElementById('group-call-window').classList.remove('hidden'); }
+function hideGroupCallWindow() { document.getElementById('group-call-window').classList.add('hidden'); }
+
+function renderGroupCallTiles() {
+    const wrap = document.getElementById('group-call-tiles');
+    if (!wrap) return;
+    const state = groupCallStateByGroup[groupCallActiveGid];
+    wrap.innerHTML = '';
+    if (!state) return;
+    state.participants.forEach(p => {
+        const tile = document.createElement('div');
+        tile.dataset.uid = p.user_id;
+        tile.className = 'group-call-tile';
+        tile.style.cssText = 'min-width:140px;padding:14px 18px;border:1px solid var(--border);background:var(--bg-elev,#111);font-family:inherit;text-align:center;';
+        const isMe = (p.user_id === currentUserId);
+        tile.innerHTML = `<div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;opacity:.6;margin-bottom:4px;">${isMe ? 'YOU' : 'CONNECTED'}</div>
+                          <div style="font-size:16px;">${(p.display || '').replace(/[<>]/g,'')}</div>`;
+        wrap.appendChild(tile);
+    });
+    // Re-apply current speaking highlight after a re-render
+    Object.keys(groupSpeakingState).forEach(uid => setTileSpeaking(uid, groupSpeakingState[uid]));
+}
+
+// ---- Speaking detection (green highlight on tiles) ----
+const groupVoiceMonitors = {};   // user_id -> {ctx, raf}
+const groupSpeakingState = {};   // user_id -> bool
+
+function setTileSpeaking(userId, speaking) {
+    const tile = document.querySelector(`#group-call-tiles .group-call-tile[data-uid="${userId}"]`);
+    if (!tile) return;
+    if (speaking) {
+        tile.style.borderColor = '#2ecc71';
+        tile.style.boxShadow = '0 0 10px rgba(46,204,113,0.55)';
+    } else {
+        tile.style.borderColor = 'var(--border)';
+        tile.style.boxShadow = 'none';
+    }
+}
+
+function monitorGroupSpeaking(userId, stream) {
+    if (!stream || groupVoiceMonitors[userId]) return;
+    let ctx;
+    try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(e) { return; }
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const monitor = { ctx: ctx, raf: null };
+    groupVoiceMonitors[userId] = monitor;
+    const loop = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+        const rms = Math.sqrt(sum / data.length);
+        const isMe = (userId === currentUserId);
+        const speaking = rms > 0.04 && !(isMe && !groupCallMicEnabled);
+        if (groupSpeakingState[userId] !== speaking) {
+            groupSpeakingState[userId] = speaking;
+            setTileSpeaking(userId, speaking);
+        }
+        monitor.raf = requestAnimationFrame(loop);
+    };
+    loop();
+}
+
+function stopGroupSpeakingMonitors() {
+    Object.keys(groupVoiceMonitors).forEach(uid => {
+        const m = groupVoiceMonitors[uid];
+        if (m.raf) cancelAnimationFrame(m.raf);
+        try { m.ctx.close(); } catch(e) {}
+        delete groupVoiceMonitors[uid];
+        delete groupSpeakingState[uid];
+    });
+}
+
+function stopGroupSpeakingMonitor(userId) {
+    const m = groupVoiceMonitors[userId];
+    if (!m) return;
+    if (m.raf) cancelAnimationFrame(m.raf);
+    try { m.ctx.close(); } catch(e) {}
+    delete groupVoiceMonitors[userId];
+    delete groupSpeakingState[userId];
+}
+
+function updateGroupMicIcon() {
+    const on = document.getElementById('group-mic-icon-on');
+    const off = document.getElementById('group-mic-icon-off');
+    if (on) on.style.display = groupCallMicEnabled ? '' : 'none';
+    if (off) off.style.display = groupCallMicEnabled ? 'none' : '';
+    const btn = document.getElementById('group-mic-btn');
+    if (btn) btn.title = groupCallMicEnabled ? 'Mute microphone' : 'Unmute microphone';
+}
+
+function onGroupCallButtonClick() {
+    if (chatMode !== 'group' || !currentGroupId) return;
+    if (!IS_SECURE) { alert('Calls can only be initiated over HTTPS.'); return; }
+    const state = groupCallStateByGroup[currentGroupId];
+    if (groupCallActiveGid === currentGroupId) { showGroupCallWindow(); return; }
+    if (state && state.active) {
+        joinGroupCall(currentGroupId);
+    } else {
+        startGroupCall(currentGroupId);
+    }
+}
+
+async function ensureGroupLocalStream() {
+    if (groupCallLocalStream) return;
+    try {
+        groupCallLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        groupCallMicEnabled = true;
+        monitorGroupSpeaking(currentUserId, groupCallLocalStream);
+    } catch(e) {
+        groupCallLocalStream = null;
+        groupCallMicEnabled = false;
+    }
+    updateGroupMicIcon();
+}
+
+async function startGroupCall(gid) {
+    await ensureGroupLocalStream();
+    groupCallActiveGid = gid;
+    socket.emit('group_call_start', { group_id: gid });
+    showGroupCallWindow();
+    setGroupCallStatus('Call started. Waiting for others...');
+}
+
+async function joinGroupCall(gid) {
+    await ensureGroupLocalStream();
+    groupCallActiveGid = gid;
+    socket.emit('group_call_join', { group_id: gid });
+    showGroupCallWindow();
+    setGroupCallStatus('Joining call...');
+}
+
+function leaveGroupCall() {
+    if (!groupCallActiveGid) { hideGroupCallWindow(); return; }
+    socket.emit('group_call_leave', { group_id: groupCallActiveGid });
+    teardownGroupCall();
+}
+
+function teardownGroupCall() {
+    Object.values(groupCallPeers).forEach(p => { try { p.close(); } catch(e){} });
+    for (const k of Object.keys(groupCallPeers)) delete groupCallPeers[k];
+    const sinks = document.getElementById('group-call-audio-sinks');
+    if (sinks) sinks.innerHTML = '';
+    for (const k of Object.keys(groupCallAudio)) delete groupCallAudio[k];
+    if (groupCallLocalStream) { groupCallLocalStream.getTracks().forEach(t => t.stop()); groupCallLocalStream = null; }
+    stopGroupSpeakingMonitors();
+    groupCallActiveGid = null;
+    groupCallActiveCallId = null;
+    hideGroupCallWindow();
+}
+
+function toggleGroupCallMic() {
+    if (!groupCallLocalStream) return;
+    groupCallMicEnabled = !groupCallMicEnabled;
+    groupCallLocalStream.getAudioTracks().forEach(t => t.enabled = groupCallMicEnabled);
+    updateGroupMicIcon();
+    if (!groupCallMicEnabled) { groupSpeakingState[currentUserId] = false; setTileSpeaking(currentUserId, false); }
+}
+
+function createGroupPeer(otherId, initiator) {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    groupCallPeers[otherId] = pc;
+    if (groupCallLocalStream) {
+        groupCallLocalStream.getTracks().forEach(t => pc.addTrack(t, groupCallLocalStream));
+    }
+    pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('group_call_signal', {
+            group_id: groupCallActiveGid, target_id: otherId,
+            payload: { type: 'ice', candidate: e.candidate }
+        });
+    };
+    pc.ontrack = (e) => {
+        let a = groupCallAudio[otherId];
+        if (!a) {
+            a = document.createElement('audio'); a.autoplay = true;
+            document.getElementById('group-call-audio-sinks').appendChild(a);
+            groupCallAudio[otherId] = a;
+        }
+        a.srcObject = e.streams[0];
+        monitorGroupSpeaking(otherId, e.streams[0]);
+    };
+    if (initiator) {
+        pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => {
+            socket.emit('group_call_signal', {
+                group_id: groupCallActiveGid, target_id: otherId,
+                payload: { type: 'offer', sdp: pc.localDescription }
+            });
+        });
+    }
+    return pc;
+}
+
+socket.on('group_call_state', function(data) {
+    groupCallStateByGroup[data.group_id] = data;
+    // Active indicator on group call button when viewing this group
+    if (chatMode === 'group' && currentGroupId === data.group_id) {
+        const dot = document.getElementById('group-call-active-dot');
+        if (dot) dot.classList.toggle('hidden', !data.active);
+    }
+    if (groupCallActiveGid === data.group_id) {
+        renderGroupCallTiles();
+        if (data.active) setGroupCallStatus(`In call · ${data.participants.length} connected`);
+        else { setGroupCallStatus('Call ended.'); teardownGroupCall(); }
+    }
+});
+
+socket.on('group_call_incoming', function(data) {
+    // Don't pop modal if it's our own start, or we're already in this call
+    if (data.started_by === currentUserId) return;
+    if (groupCallActiveGid === data.group_id) return;
+    pendingIncomingGroupCall = data;
+    document.getElementById('group-call-incoming-text').textContent =
+        `${data.started_by_name} started a group call.`;
+    document.getElementById('group-call-incoming-modal').classList.remove('hidden');
+});
+
+function acceptIncomingGroupCall() {
+    const d = pendingIncomingGroupCall; pendingIncomingGroupCall = null;
+    document.getElementById('group-call-incoming-modal').classList.add('hidden');
+    if (!d) return;
+    joinGroupCall(d.group_id);
+}
+function dismissIncomingGroupCall() {
+    pendingIncomingGroupCall = null;
+    document.getElementById('group-call-incoming-modal').classList.add('hidden');
+}
+
+socket.on('group_call_peer_join', function(data) {
+    if (groupCallActiveGid !== data.group_id) return;
+    // We are already in the call — initiate offer to the newcomer
+    if (!groupCallPeers[data.user_id]) createGroupPeer(data.user_id, true);
+});
+
+socket.on('group_call_peer_leave', function(data) {
+    if (groupCallActiveGid !== data.group_id) return;
+    const pc = groupCallPeers[data.user_id];
+    if (pc) { try { pc.close(); } catch(e){} delete groupCallPeers[data.user_id]; }
+    const a = groupCallAudio[data.user_id];
+    if (a) { try { a.remove(); } catch(e){} delete groupCallAudio[data.user_id]; }
+    stopGroupSpeakingMonitor(data.user_id);
+});
+
+socket.on('group_call_signal', async function(data) {
+    if (groupCallActiveGid !== data.group_id) return;
+    const from = data.from_id;
+    const payload = data.payload || {};
+    let pc = groupCallPeers[from];
+    if (!pc) pc = createGroupPeer(from, false);
+    try {
+        if (payload.type === 'offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            const ans = await pc.createAnswer();
+            await pc.setLocalDescription(ans);
+            socket.emit('group_call_signal', {
+                group_id: data.group_id, target_id: from,
+                payload: { type: 'answer', sdp: pc.localDescription }
+            });
+        } else if (payload.type === 'answer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        } else if (payload.type === 'ice' && payload.candidate) {
+            try { await pc.addIceCandidate(payload.candidate); } catch(e) {}
+        }
+    } catch(e) { console.error('group signal error', e); }
+});
+
+socket.on('group_call_failed', function(data) {
+    alert('Group call: ' + (data.reason || 'failed'));
+    teardownGroupCall();
+});
 </script>
 {% endblock %}
