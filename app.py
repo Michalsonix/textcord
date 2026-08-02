@@ -1,95 +1,90 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_file, flash, session
-from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead, MutedCall, DeviceRegistration, runtime_migrate
+from models import db, User, Message, Report, LoginLog, RecoveryFile, BlockedUser, MutedUser, ChatNickname, send_system_message, Group, GroupMember, ActiveSession, GroupMessageRead, MutedCall
 from datetime import datetime, timedelta
 import uuid
 import os
 import json
 import secrets
 import io
-import subprocess
-import re
-import hashlib
-import base64
-import ipaddress
-from functools import wraps
+import json as _json
 from werkzeug.utils import secure_filename
-from cryptography.fernet import Fernet
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///textcord.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Trust X-Forwarded-* from local nginx so request.remote_addr is the real client IP
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
-app.config['MAX_CONTENT_LENGTH'] = 30 * 1024 * 1024  # 30 MB upload cap
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-BLOCKED_EXT = {'exe', 'msi', 'com', 'scr', 'bat', 'cmd', 'vbs', 'vbe', 'ps1', 'ps1xml', 'js', 'jse', 'wsf', 'wsh', 'jar', 'app', 'dll', 'sys'}
+db.init_app(app)
 
-# Server-side feature flags from /etc/textcord.conf (written by installer)
-SERVER_FLAGS = {'ALLOW_REGISTRATION': 'no', 'DOMAIN': '', 'USE_HSTS': 'no'}
-try:
-    with open('/etc/textcord.conf') as _f:
-        for _line in _f:
-            if '=' in _line:
-                _k, _v = _line.strip().split('=', 1)
-                SERVER_FLAGS[_k] = _v.strip('"').strip("'")
-except Exception:
-    pass
+# ─── Setup token (one-time admin creation URL) ────────────────────────────
+SETUP_TOKEN_FILE = os.environ.get('TEXTCORD_SETUP_TOKEN_FILE', '/var/lib/textcord/setup_token')
+TEXTCORD_CONF = os.environ.get('TEXTCORD_CONF', '/etc/textcord.conf')
 
-def registration_enabled():
-    return SERVER_FLAGS.get('ALLOW_REGISTRATION', 'no').lower() == 'yes'
-
-def _fernet():
-    key = hashlib.sha256(app.config['SECRET_KEY'].encode() if isinstance(app.config['SECRET_KEY'], str) else app.config['SECRET_KEY']).digest()
-    return Fernet(base64.urlsafe_b64encode(key))
-
-def _is_private_ip(ip):
+def _read_setup_token():
     try:
-        return ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback
+        with open(SETUP_TOKEN_FILE, 'r') as f:
+            return f.read().strip()
     except Exception:
-        return False
-
-def lookup_mac(ip):
-    """Best-effort ARP lookup. Only works for hosts on the same LAN."""
-    if not ip:
         return None
+
+def _consume_setup_token():
+    try: os.remove(SETUP_TOKEN_FILE)
+    except Exception: pass
+
+def _write_conf_kv(key, value):
     try:
-        out = subprocess.run(['arp', '-n', ip], capture_output=True, text=True, timeout=2).stdout
-        m = re.search(r'(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})', out)
-        if m:
-            mac = m.group(1).lower()
-            if mac != '00:00:00:00:00:00':
-                return mac
+        lines = []
+        if os.path.isfile(TEXTCORD_CONF):
+            with open(TEXTCORD_CONF, 'r') as f:
+                lines = f.read().splitlines()
+        lines = [l for l in lines if not l.startswith(key + '=')]
+        lines.append(f'{key}={value}')
+        with open(TEXTCORD_CONF, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
     except Exception:
         pass
-    return None
 
-def device_key_for_request(fp_from_form=None):
-    """Return (key, is_mac). Prefer real MAC when client is on LAN, else browser fingerprint hash."""
-    ip = request.remote_addr or ''
-    if _is_private_ip(ip):
-        mac = lookup_mac(ip)
-        if mac:
-            return mac, True
-    fp = (fp_from_form or request.form.get('device_fp') or request.cookies.get('device_fp') or '').strip()
-    if fp:
-        return 'fp:' + hashlib.sha256(fp.encode()).hexdigest()[:32], False
-    return None, False
+def _read_conf_kv(key, default=''):
+    """Read a KEY=value from TEXTCORD_CONF at request time (no restart needed
+    for lookups). Falls back to env var, then default."""
+    try:
+        if os.path.isfile(TEXTCORD_CONF):
+            with open(TEXTCORD_CONF, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(key + '='):
+                        return line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return os.environ.get(key, default)
 
-def admin_required(f):
-    @wraps(f)
-    def w(*a, **kw):
-        if not current_user.is_authenticated or current_user.role != 'admin':
-            return jsonify({'error': 'Forbidden'}), 403
-        return f(*a, **kw)
-    return w
+def _allow_registration():
+    return _read_conf_kv('ALLOW_REGISTRATION', 'no').lower() == 'yes'
 
-db.init_app(app)
+def _restart_service_async():
+    """Fire-and-forget systemd restart so config changes (ALLOW_REGISTRATION,
+    HSTS, …) take effect immediately after the admin flips a toggle."""
+    def _do():
+        try:
+            import time as _t; _t.sleep(0.5)
+            subprocess.run(['systemctl', 'restart', 'textcord.service'],
+                           check=False, capture_output=True)
+        except Exception:
+            pass
+    try:
+        import threading, subprocess
+        threading.Thread(target=_do, daemon=True).start()
+    except Exception:
+        pass
+
+def _valid_setup_token(token):
+    stored = _read_setup_token()
+    return bool(stored) and bool(token) and secrets.compare_digest(stored, token)
+
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -121,11 +116,6 @@ def check_ban_on_request():
                 return jsonify({'error': 'banned', 'redirect': '/login'}), 403
             return redirect(url_for('login'))
 
-
-@app.context_processor
-def _inject_flags():
-    return {'ALLOW_REGISTRATION_UI': registration_enabled()}
-
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(user_id)
@@ -149,16 +139,15 @@ def login():
         user = User.query.filter_by(identifier=identifier).first()
         
         if user and user.check_password(password):
-            _dk, _ = device_key_for_request()
             log = LoginLog(user_id=user.id, ip_address=request.remote_addr,
-                          user_agent=request.headers.get('User-Agent'), mac_or_fp=_dk, success=True)
+                          user_agent=request.headers.get('User-Agent'), success=True)
             db.session.add(log)
             
             if user.is_deleted:
                 error = "This account has been deleted."
                 log.success = False
                 db.session.commit()
-                return render_template('login.html', error=error, allow_registration=registration_enabled())
+                return render_template('login.html', error=error)
             
             if user.is_panic_locked:
                 db.session.commit()
@@ -185,7 +174,7 @@ def login():
                 error = "Session limit reached. If this wasn't you, contact the administrator."
                 log.success = False
                 db.session.commit()
-                return render_template('login.html', error=error, allow_registration=registration_enabled())
+                return render_template('login.html', error=error)
             
             user.last_active = datetime.utcnow()
             db.session.commit()
@@ -204,13 +193,13 @@ def login():
             return redirect(url_for('messages'))
         else:
             if user:
-                _dk, _ = device_key_for_request()
                 log = LoginLog(user_id=user.id, ip_address=request.remote_addr,
-                              user_agent=request.headers.get('User-Agent'), mac_or_fp=_dk, success=False)
+                              user_agent=request.headers.get('User-Agent'), success=False)
                 db.session.add(log)
                 db.session.commit()
             error = "Invalid identifier or password."
-    return render_template('login.html', error=error, allow_registration=registration_enabled())
+    return render_template('login.html', error=error,
+                           allow_registration=_allow_registration())
 
 @app.route('/login/recovery', methods=['GET', 'POST'])
 def login_recovery():
@@ -333,7 +322,9 @@ def messages():
         })
     my_groups.sort(key=lambda x: x['last_message'].created_at if x['last_message'] else datetime.min, reverse=True)
     
-    return render_template('messages.html', contacts=contacts, groups=my_groups, is_admin=current_user.role == 'admin')
+    return render_template('messages.html', contacts=contacts, groups=my_groups,
+                           is_admin=current_user.role == 'admin',
+                           ringtone_url=get_default_ringtone_url())
 
 @app.route('/api/messages/<contact_id>')
 @login_required
@@ -1094,7 +1085,8 @@ def admin_dashboard():
     return render_template('admin/dashboard.html',
         active_users=active_users, active_admins=active_admins,
         total_users=total_users, total_admins=total_admins,
-        pending_reports=pending_reports, all_users=all_users)
+        pending_reports=pending_reports, all_users=all_users,
+        allow_registration=_allow_registration())
 
 @app.route('/admin/users')
 @login_required
@@ -1132,7 +1124,7 @@ def admin_get_user(user_id):
         'is_panic_locked': user.is_panic_locked,
         'activity_status': user.activity_status(),
         'last_active': user.last_active.isoformat() if user.last_active else None,
-        'login_logs': [{'id': l.id, 'ip': l.ip_address, 'mac': l.mac_or_fp, 'success': l.success, 'date': l.created_at.strftime('%Y-%m-%d %H:%M:%S')} for l in login_logs],
+        'login_logs': [{'id': l.id, 'ip': l.ip_address, 'success': l.success, 'date': l.created_at.strftime('%Y-%m-%d %H:%M:%S')} for l in login_logs],
         'reports_by_count': len(reports_by),
         'reports_on_count': len(reports_on),
         'reports_by': [{'id': r.id, 'reported': r.reported_user.display_name, 'message': r.message.content[:100], 'date': r.created_at.strftime('%Y-%m-%d %H:%M:%S')} for r in reports_by],
@@ -1515,207 +1507,442 @@ def call_signal(data):
         'payload': data.get('payload'),
     }, room=f'user_{data.get("target_id")}')
 
+# ─── Group Call Signaling (text-style mesh) ─────────────────────────────
+# In-memory only; calls die with the process. Each entry:
+#   group_calls[group_id] = {
+#       'call_id': str, 'started_by': uid, 'started_at': datetime,
+#       'participants': {uid: {name, nickname}}, 'answered': set(uid),
+#   }
+group_calls = {}
 
+def _user_display(u):
+    if u.nickname:
+        return u.nickname
+    return f"{u.first_name} {u.last_name}"
 
-# ─── SELF-REGISTRATION ───
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if not registration_enabled():
-        return redirect(url_for('login'))
-    if current_user.is_authenticated:
-        return redirect(url_for('messages'))
-    error = None
-    if request.method == 'POST':
-        identifier = request.form.get('identifier', '').strip()
-        first_name = request.form.get('first_name', '').strip()
-        last_name = request.form.get('last_name', '').strip()
-        password = request.form.get('password', '').strip()
-        nickname = request.form.get('nickname', '').strip() or None
-        if not identifier or not first_name or not last_name or len(password) < 6:
-            error = "All fields required, password min 6 chars."
-        elif User.query.filter_by(identifier=identifier).first():
-            error = "Identifier already taken."
-        else:
-            dk, is_mac = device_key_for_request()
-            if not dk:
-                error = "Could not identify device. Please enable JavaScript and try again."
-            else:
-                existing = DeviceRegistration.query.filter_by(device_key=dk).count()
-                if existing >= 1:
-                    error = "Registration limit reached for this device."
-                else:
-                    u = User(identifier=identifier, first_name=first_name, last_name=last_name,
-                            nickname=nickname, role='user')
-                    u.set_password(password)
-                    db.session.add(u)
-                    db.session.flush()
-                    reg = DeviceRegistration(device_key=dk, is_mac=is_mac,
-                                             ip_address=request.remote_addr, user_id=u.id)
-                    db.session.add(reg)
-                    db.session.commit()
-                    send_system_message(u.id, f"Welcome {first_name} {last_name}! Your account has been created. Please be respectful.")
-                    return redirect(url_for('login'))
-    return render_template('register.html', error=error)
-
-
-# ─── ADMIN: DEVICE REGISTRATIONS ───
-
-@app.route('/admin/devices')
-@login_required
-def admin_devices_page():
-    if current_user.role != 'admin':
-        return redirect(url_for('messages'))
-    if not registration_enabled():
-        return redirect(url_for('admin_dashboard'))
-    from sqlalchemy import func
-    rows = db.session.query(
-        DeviceRegistration.device_key,
-        DeviceRegistration.is_mac,
-        func.count(DeviceRegistration.id).label('cnt')
-    ).group_by(DeviceRegistration.device_key, DeviceRegistration.is_mac).all()
-    devices = [{'key': r[0], 'is_mac': r[1], 'count': r[2]} for r in rows]
-    return render_template('admin/devices.html', devices=devices)
-
-
-@app.route('/api/admin/devices/<path:key>')
-@login_required
-@admin_required
-def admin_device_detail(key):
-    regs = DeviceRegistration.query.filter_by(device_key=key).order_by(DeviceRegistration.created_at.desc()).all()
-    return jsonify({
-        'key': key,
-        'count': len(regs),
-        'accounts': [{
-            'user_id': r.user_id,
-            'identifier': r.user.identifier if r.user else '(deleted)',
-            'name': r.user.full_name if r.user else '?',
-            'ip': r.ip_address,
-            'created_at': r.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            'is_mac': r.is_mac,
-        } for r in regs]
-    })
-
-
-@app.route('/api/admin/devices/<path:key>/reset', methods=['POST'])
-@login_required
-@admin_required
-def admin_device_reset(key):
-    DeviceRegistration.query.filter_by(device_key=key).delete()
+def _post_group_system(group_id, content):
+    """Insert a system-style message into the group conversation and broadcast it live."""
+    system_user = User.query.filter_by(identifier='SYSTEM').first()
+    sender_id = system_user.id if system_user else current_user.id
+    msg = Message(
+        sender_id=sender_id,
+        group_id=group_id,
+        content=content,
+        is_system=True,
+        status='delivered',
+    )
+    db.session.add(msg)
     db.session.commit()
-    return jsonify({'ok': True})
+    members = GroupMember.query.filter_by(group_id=group_id).all()
+    for m in members:
+        socketio.emit('new_group_message', {
+            'id': msg.id,
+            'group_id': group_id,
+            'sender_id': sender_id,
+            'content': content,
+            'sender_name': 'System',
+            'sender_first_name': 'System',
+            'sender_last_name': 'TextCord',
+            'sender_nickname': None,
+            'is_system': True,
+            'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        }, room=f'user_{m.user_id}')
 
+def _broadcast_group_call_state(group_id):
+    call = group_calls.get(group_id)
+    payload = {
+        'group_id': group_id,
+        'active': bool(call),
+        'call_id': call['call_id'] if call else None,
+        'started_by': call['started_by'] if call else None,
+        'participants': [
+            {'user_id': uid, 'display': info['name']}
+            for uid, info in (call['participants'].items() if call else [])
+        ],
+    }
+    members = GroupMember.query.filter_by(group_id=group_id).all()
+    for m in members:
+        socketio.emit('group_call_state', payload, room=f'user_{m.user_id}')
 
-# ─── FILE UPLOADS (encrypted at rest) ───
+@socketio.on('group_call_start')
+def group_call_start(data):
+    if not current_user.is_authenticated: return
+    gid = data.get('group_id')
+    if not gid: return
+    mem = GroupMember.query.filter_by(group_id=gid, user_id=current_user.id).first()
+    if not mem: return
+    if gid in group_calls:
+        # Already active — treat as join
+        return group_call_join({'group_id': gid})
+    call_id = secrets.token_hex(8)
+    name = _user_display(current_user)
+    group_calls[gid] = {
+        'call_id': call_id,
+        'started_by': current_user.id,
+        'started_at': datetime.utcnow(),
+        'participants': {current_user.id: {'name': name}},
+        'answered': {current_user.id},
+    }
+    _post_group_system(gid, f"Group call started by {name}.")
+    # Invite all other members
+    members = GroupMember.query.filter_by(group_id=gid).all()
+    for m in members:
+        socketio.emit('group_call_incoming', {
+            'group_id': gid,
+            'call_id': call_id,
+            'started_by': current_user.id,
+            'started_by_name': name,
+        }, room=f'user_{m.user_id}')
+    _broadcast_group_call_state(gid)
 
-class _UploadIndex:
-    """Filesystem-backed index: id -> (original_name, mime, size). Stored alongside encrypted blobs."""
-    @staticmethod
-    def save(file_id, meta):
-        with open(os.path.join(UPLOAD_DIR, file_id + '.meta'), 'w') as f:
-            json.dump(meta, f)
-    @staticmethod
-    def load(file_id):
-        path = os.path.join(UPLOAD_DIR, file_id + '.meta')
-        if not os.path.exists(path):
-            return None
-        with open(path) as f:
-            return json.load(f)
+@socketio.on('group_call_join')
+def group_call_join(data):
+    if not current_user.is_authenticated: return
+    gid = data.get('group_id')
+    call = group_calls.get(gid)
+    if not call: 
+        emit('group_call_failed', {'group_id': gid, 'reason': 'No active call.'})
+        return
+    mem = GroupMember.query.filter_by(group_id=gid, user_id=current_user.id).first()
+    if not mem: return
+    if current_user.id in call['participants']:
+        return
+    name = _user_display(current_user)
+    call['participants'][current_user.id] = {'name': name}
+    call['answered'].add(current_user.id)
+    _post_group_system(gid, f"{name} joined the call.")
+    _broadcast_group_call_state(gid)
+    # Tell existing participants to initiate WebRTC offers to the joiner
+    for uid in list(call['participants'].keys()):
+        if uid != current_user.id:
+            socketio.emit('group_call_peer_join', {
+                'group_id': gid,
+                'user_id': current_user.id,
+                'display': name,
+            }, room=f'user_{uid}')
 
-
-@app.route('/api/messages/upload', methods=['POST'])
-@login_required
-def upload_file():
-    receiver_id = request.form.get('receiver_id')
-    group_id = request.form.get('group_id')
-    if not receiver_id and not group_id:
-        return jsonify({'error': 'Missing target'}), 400
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file'}), 400
-    f = request.files['file']
-    if not f.filename:
-        return jsonify({'error': 'Empty filename'}), 400
-    fname = secure_filename(f.filename) or 'file'
-    if '.' not in fname:
-        return jsonify({'error': 'File extension required'}), 400
-    ext = fname.rsplit('.', 1)[1].lower()
-    if ext in BLOCKED_EXT:
-        return jsonify({'error': f'File type .{ext} is not allowed'}), 400
-    data = f.read()
-    if len(data) > 30 * 1024 * 1024:
-        return jsonify({'error': 'File exceeds 30 MB'}), 400
-    if len(data) == 0:
-        return jsonify({'error': 'Empty file'}), 400
-    file_id = secrets.token_urlsafe(24)
-    enc = _fernet().encrypt(data)
-    with open(os.path.join(UPLOAD_DIR, file_id + '.bin'), 'wb') as out:
-        out.write(enc)
-    _UploadIndex.save(file_id, {'name': fname, 'size': len(data), 'owner': current_user.id, 'ext': ext})
-
-    payload = json.dumps({'id': file_id, 'name': fname, 'size': len(data)})
-    content = '[FILE]' + payload
-
-    if group_id:
-        mem = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
-        if not mem:
-            return jsonify({'error': 'Not a member'}), 403
-        msg = Message(sender_id=current_user.id, group_id=group_id, content=content, status='delivered')
-        db.session.add(msg); db.session.commit()
-        members = GroupMember.query.filter_by(group_id=group_id).all()
-        for m in members:
-            if m.user_id != current_user.id:
-                socketio.emit('new_group_message', {
-                    'id': msg.id, 'group_id': group_id, 'sender_id': current_user.id,
-                    'content': content, 'sender_name': current_user.display_name,
-                    'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
-                }, room=f'user_{m.user_id}')
-        return jsonify({'ok': True, 'id': msg.id})
+@socketio.on('group_call_leave')
+def group_call_leave(data):
+    if not current_user.is_authenticated: return
+    gid = data.get('group_id')
+    call = group_calls.get(gid)
+    if not call: return
+    if current_user.id not in call['participants']: return
+    name = call['participants'][current_user.id]['name']
+    del call['participants'][current_user.id]
+    # Notify remaining peers to drop this peer
+    for uid in list(call['participants'].keys()):
+        socketio.emit('group_call_peer_leave', {
+            'group_id': gid, 'user_id': current_user.id,
+        }, room=f'user_{uid}')
+    if not call['participants']:
+        answered = len(call['answered'])
+        if answered <= 1:
+            _post_group_system(gid, f"Call ended — no one answered.")
+        else:
+            _post_group_system(gid, f"Call ended ({answered} answered).")
+        del group_calls[gid]
     else:
-        blocked = BlockedUser.query.filter_by(blocker_id=receiver_id, blocked_id=current_user.id).first()
-        if blocked:
-            return jsonify({'error': 'You are blocked by this user'}), 403
-        msg = Message(sender_id=current_user.id, receiver_id=receiver_id, content=content, status='delivered')
-        db.session.add(msg); db.session.commit()
-        socketio.emit('new_message', {
-            'id': msg.id, 'sender_id': current_user.id, 'receiver_id': receiver_id,
-            'content': content, 'status': 'delivered', 'is_system': False, 'is_mine': False,
-            'sender_name': current_user.display_name, 'reply_to_content': None, 'reply_to_sender': None,
-            'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M:%S')
-        }, room=f'user_{receiver_id}')
-        return jsonify({'ok': True, 'id': msg.id})
+        _post_group_system(gid, f"{name} left the call.")
+    _broadcast_group_call_state(gid)
 
+@socketio.on('group_call_signal')
+def group_call_signal(data):
+    """Relay WebRTC offer/answer/ice between two specific participants."""
+    if not current_user.is_authenticated: return
+    gid = data.get('group_id')
+    target = data.get('target_id')
+    call = group_calls.get(gid)
+    if not call or current_user.id not in call['participants'] or target not in call['participants']:
+        return
+    socketio.emit('group_call_signal', {
+        'group_id': gid,
+        'from_id': current_user.id,
+        'payload': data.get('payload'),
+    }, room=f'user_{target}')
 
-@app.route('/api/files/<file_id>')
-@login_required
-def download_file(file_id):
-    if not re.fullmatch(r'[A-Za-z0-9_\-]{8,64}', file_id):
-        return jsonify({'error': 'Bad id'}), 400
-    meta = _UploadIndex.load(file_id)
-    if not meta:
-        return jsonify({'error': 'Not found'}), 404
-    path = os.path.join(UPLOAD_DIR, file_id + '.bin')
-    if not os.path.exists(path):
-        return jsonify({'error': 'Not found'}), 404
-    try:
-        with open(path, 'rb') as fh:
-            data = _fernet().decrypt(fh.read())
-    except Exception:
-        return jsonify({'error': 'Decryption failed'}), 500
-    return send_file(io.BytesIO(data), download_name=meta.get('name', 'file'), as_attachment=True)
-
-
-@app.errorhandler(413)
-def too_large(e):
-    return jsonify({'error': 'File too large (max 30 MB)'}), 413
-
+@socketio.on('group_call_query')
+def group_call_query(data):
+    """Client asks for the current call state of a group (e.g., on opening it)."""
+    if not current_user.is_authenticated: return
+    gid = data.get('group_id')
+    if not gid: return
+    mem = GroupMember.query.filter_by(group_id=gid, user_id=current_user.id).first()
+    if not mem: return
+    call = group_calls.get(gid)
+    emit('group_call_state', {
+        'group_id': gid,
+        'active': bool(call),
+        'call_id': call['call_id'] if call else None,
+        'started_by': call['started_by'] if call else None,
+        'participants': [
+            {'user_id': uid, 'display': info['name']}
+            for uid, info in (call['participants'].items() if call else [])
+        ],
+    })
 
 # ─── INIT ───
 
 def init_db():
     with app.app_context():
         db.create_all()
-        runtime_migrate()
+
+# ─── RINGTONES (Package 3) ───
+RINGTONES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'ringtones')
+APP_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_config.json')
+ALLOWED_RING_EXT = {'mp3', 'wav'}
+MAX_RING_SIZE = 5 * 1024 * 1024  # 5 MB
+
+def _load_app_config():
+    try:
+        with open(APP_CONFIG_PATH, 'r') as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+def _save_app_config(cfg):
+    try:
+        with open(APP_CONFIG_PATH, 'w') as f:
+            _json.dump(cfg, f)
+    except Exception:
+        pass
+
+def get_default_ringtone_url():
+    cfg = _load_app_config()
+    name = cfg.get('default_ringtone', '')
+    if not name:
+        return None
+    path = os.path.join(RINGTONES_DIR, name)
+    if not os.path.isfile(path):
+        return None
+    return f"/static/ringtones/{name}"
+
+def _list_ringtones():
+    if not os.path.isdir(RINGTONES_DIR):
+        os.makedirs(RINGTONES_DIR, exist_ok=True)
+    return sorted([f for f in os.listdir(RINGTONES_DIR) if f.rsplit('.', 1)[-1].lower() in ALLOWED_RING_EXT])
+
+def _audio_duration_seconds(path):
+    """Return duration in seconds or None. Tries ffprobe, then mutagen."""
+    try:
+        import subprocess
+        r = subprocess.run(
+            ['ffprobe','-v','error','-show_entries','format=duration',
+             '-of','default=noprint_wrappers=1:nokey=1', path],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            s = r.stdout.strip()
+            if s: return float(s)
+    except Exception:
+        pass
+    try:
+        from mutagen import File as MFile
+        mf = MFile(path)
+        if mf and getattr(mf, 'info', None) and getattr(mf.info, 'length', None):
+            return float(mf.info.length)
+    except Exception:
+        pass
+    return None
+
+@app.route('/admin/ringtones')
+@login_required
+def admin_ringtones():
+    if current_user.role != 'admin':
+        return redirect(url_for('messages'))
+    cfg = _load_app_config()
+    return render_template('admin/ringtones.html',
+                           ringtones=_list_ringtones(),
+                           default=cfg.get('default_ringtone', ''),
+                           msg=request.args.get('msg'),
+                           error=request.args.get('error'))
+
+@app.route('/admin/ringtones/upload', methods=['POST'])
+@login_required
+def admin_ringtones_upload():
+    if current_user.role != 'admin':
+        return redirect(url_for('messages'))
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return redirect('/admin/ringtones?error=No+file')
+    ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+    if ext not in ALLOWED_RING_EXT:
+        return redirect('/admin/ringtones?error=Only+MP3+or+WAV')
+    data = f.read()
+    if len(data) > MAX_RING_SIZE:
+        return redirect('/admin/ringtones?error=File+too+large')
+    os.makedirs(RINGTONES_DIR, exist_ok=True)
+    safe = secure_filename(f.filename)
+    if not safe:
+        safe = f"ring_{secrets.token_hex(4)}.{ext}"
+    dest = os.path.join(RINGTONES_DIR, safe)
+    with open(dest, 'wb') as out:
+        out.write(data)
+    # Duration check (max 30s). Prefer ffprobe; fallback to mutagen; else accept.
+    try:
+        dur = _audio_duration_seconds(dest)
+        if dur is not None and dur > 30.5:
+            try: os.remove(dest)
+            except Exception: pass
+            return redirect('/admin/ringtones?error=Too+long+(max+30s)')
+    except Exception:
+        pass
+    return redirect('/admin/ringtones?msg=Uploaded')
+
+@app.route('/admin/ringtones/set-default', methods=['POST'])
+@login_required
+def admin_ringtones_set_default():
+    if current_user.role != 'admin':
+        return redirect(url_for('messages'))
+    name = request.form.get('name', '').strip()
+    if name:
+        path = os.path.join(RINGTONES_DIR, secure_filename(name))
+        if not os.path.isfile(path):
+            return redirect('/admin/ringtones?error=Not+found')
+    cfg = _load_app_config()
+    cfg['default_ringtone'] = name
+    _save_app_config(cfg)
+    return redirect('/admin/ringtones?msg=Default+set')
+
+@app.route('/admin/ringtones/delete', methods=['POST'])
+@login_required
+def admin_ringtones_delete():
+    if current_user.role != 'admin':
+        return redirect(url_for('messages'))
+    name = secure_filename(request.form.get('name', '').strip())
+    if not name:
+        return redirect('/admin/ringtones?error=Missing+name')
+    path = os.path.join(RINGTONES_DIR, name)
+    if os.path.isfile(path):
+        try: os.remove(path)
+        except Exception: pass
+    cfg = _load_app_config()
+    if cfg.get('default_ringtone') == name:
+        cfg['default_ringtone'] = ''
+        _save_app_config(cfg)
+    return redirect('/admin/ringtones?msg=Deleted')
+
+# ─── One-time admin setup flow (used by the installer) ────────────────────
+@app.route('/o/admin/<token>', methods=['GET', 'POST'])
+def setup_admin(token):
+    if not _valid_setup_token(token):
+        return "Setup link invalid or already used.", 404
+    # Admin creation is MANDATORY. Never skip — a fresh install has no admin
+    # (installer wipes /var/lib/textcord), and re-showing this form after a
+    # partial setup keeps the flow deterministic.
+    existing_admin = User.query.filter_by(role='admin').first()
+    error = None
+    if existing_admin:
+        # An admin already exists → move on to the registration-choice step.
+        return redirect(url_for('setup_register', token=token))
+    if request.method == 'POST':
+        identifier = (request.form.get('identifier') or '').strip()
+        first_name = (request.form.get('first_name') or '').strip()
+        last_name  = (request.form.get('last_name') or '').strip()
+        nickname   = (request.form.get('nickname') or '').strip() or None
+        password   = (request.form.get('password') or '').strip()
+        create_rec = request.form.get('create_recovery') == 'on'
+        if not identifier or not first_name or not last_name or not password:
+            error = "All required fields must be filled."
+        elif User.query.filter_by(identifier=identifier).first():
+            error = "Identifier already taken."
+        else:
+            u = User(identifier=identifier, first_name=first_name,
+                     last_name=last_name, nickname=nickname, role='admin')
+            u.set_password(password)
+            db.session.add(u)
+            db.session.commit()
+            if create_rec:
+                try:
+                    rf = RecoveryFile(user_id=u.id, code=secrets.token_urlsafe(32),
+                                      created_by_admin=False)
+                    db.session.add(rf)
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+            return redirect(url_for('setup_register', token=token))
+    return render_template('setup_admin.html', token=token, error=error)
+
+@app.route('/o/admin/<token>/register', methods=['GET', 'POST'])
+def setup_register(token):
+    if not _valid_setup_token(token):
+        return "Setup link invalid or already used.", 404
+    # Guard: never allow choosing the registration flag before an admin
+    # exists. Someone who guessed the URL suffix must still go through the
+    # admin creation step first.
+    if not User.query.filter_by(role='admin').first():
+        return redirect(url_for('setup_admin', token=token))
+    if request.method == 'POST':
+        choice = request.form.get('allow_registration', 'no')
+        value = 'yes' if choice == 'yes' else 'no'
+        _write_conf_kv('ALLOW_REGISTRATION', value)
+        _consume_setup_token()
+        # The registration flag is only read from /etc/textcord.conf on
+        # startup for env-injection; restart so the setting is guaranteed
+        # to apply immediately (matches the documented behaviour).
+        _restart_service_async()
+        return redirect(url_for('login'))
+    return render_template('setup_register.html', token=token)
+
+# ─── Self-registration (only enabled when ALLOW_REGISTRATION=yes) ─────────
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if not _allow_registration():
+        return "Registration is disabled on this server.", 404
+    if current_user.is_authenticated:
+        return redirect(url_for('messages'))
+    error = None
+    if request.method == 'POST':
+        # Re-check on POST too — the flag might have been toggled off between
+        # the form render and submission.
+        if not _allow_registration():
+            return "Registration is disabled on this server.", 404
+        identifier = (request.form.get('identifier') or '').strip()
+        first_name = (request.form.get('first_name') or '').strip()
+        last_name  = (request.form.get('last_name') or '').strip()
+        nickname   = (request.form.get('nickname') or '').strip() or None
+        password   = (request.form.get('password') or '').strip()
+        if not identifier or not first_name or not last_name or not password:
+            error = "All required fields must be filled."
+        elif identifier.upper() == 'SYSTEM':
+            error = "This identifier is reserved."
+        elif User.query.filter_by(identifier=identifier).first():
+            error = "Identifier already taken."
+        else:
+            u = User(identifier=identifier, first_name=first_name,
+                     last_name=last_name, nickname=nickname, role='user')
+            u.set_password(password)
+            db.session.add(u)
+            db.session.commit()
+            try:
+                socketio.emit('new_user', {
+                    'id': u.id, 'identifier': u.identifier,
+                    'display_name': u.display_name, 'full_name': u.full_name,
+                })
+            except Exception:
+                pass
+            return redirect(url_for('login'))
+    return render_template('register.html', error=error)
+
+# ─── Admin: toggle self-registration at runtime ───────────────────────────
+@app.route('/api/admin/registration-toggle', methods=['POST'])
+@login_required
+def admin_registration_toggle():
+    if current_user.role != 'admin':
+        return jsonify({'error': 'forbidden'}), 403
+    choice = (request.form.get('allow_registration')
+              or (request.get_json(silent=True) or {}).get('allow_registration')
+              or 'no')
+    value = 'yes' if str(choice).lower() == 'yes' else 'no'
+    _write_conf_kv('ALLOW_REGISTRATION', value)
+    _restart_service_async()
+    return jsonify({'ok': True, 'allow_registration': value,
+                    'note': 'Service is restarting to apply the change.'})
 
 if __name__ == '__main__':
     init_db()
-    socketio.run(app, host=os.environ.get('TEXTCORD_HOST', '0.0.0.0'), port=int(os.environ.get('TEXTCORD_PORT', '5000')))
+    socketio.run(
+        app,
+        host=os.environ.get('TEXTCORD_HOST', '0.0.0.0'),
+        port=int(os.environ.get('TEXTCORD_PORT', '5000')),
+        allow_unsafe_werkzeug=True,
+    )

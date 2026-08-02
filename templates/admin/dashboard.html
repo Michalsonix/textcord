@@ -2,10 +2,10 @@
 {% block content %}
 <div style="padding:20px;">
     <div class="topbar" style="border:none;padding:0;margin-bottom:20px;">
-        <a href="/logout" class="btn">Logout</a>
-        <a href="/messages" class="btn">Go to Messages</a>
+        <a href="/logout" class="btn" data-i18n="nav.logout">Logout</a>
+        <a href="/messages" class="btn" data-i18n="nav.messages">Go to Messages</a>
     </div>
-    <h1 style="text-transform:uppercase;letter-spacing:4px;margin-bottom:30px;">Admin Dashboard</h1>
+    <h1 data-i18n="admin.title" style="text-transform:uppercase;letter-spacing:4px;margin-bottom:30px;">Admin Dashboard</h1>
     
     <div class="admin-stats">
         <div class="stat-box"><div class="stat-value">{{ active_users }}</div><div class="stat-label">Active Users</div></div>
@@ -15,14 +15,24 @@
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;">
-        <a href="/admin/users" class="btn btn-full">Manage Users</a>
-        <a href="/admin/permissions" class="btn btn-full">Manage Permissions</a>
-        <a href="/admin/reports" class="btn btn-full">Message Reports {% if pending_reports %}({{ pending_reports }}){% endif %}</a>
-        <a href="/admin/create-user" class="btn btn-full">Create User Account</a>
-        <button class="btn btn-full" onclick="openSystemMsg()">Send System Message</button>
-        {% if ALLOW_REGISTRATION_UI %}
-        <a href="/admin/devices" class="btn btn-full">Device Registrations</a>
-        {% endif %}
+        <a href="/admin/users" class="btn btn-full" data-i18n="admin.manage_users">Manage Users</a>
+        <a href="/admin/permissions" class="btn btn-full" data-i18n="admin.manage_perms">Manage Permissions</a>
+        <a href="/admin/reports" class="btn btn-full"><span data-i18n="admin.reports">Message Reports</span> {% if pending_reports %}({{ pending_reports }}){% endif %}</a>
+        <a href="/admin/create-user" class="btn btn-full" data-i18n="admin.create_user">Create User Account</a>
+        <a href="/admin/ringtones" class="btn btn-full" data-i18n="admin.ringtones">Ringtones</a>
+        <button class="btn btn-full" onclick="openSystemMsg()" data-i18n="admin.sys_msg">Send System Message</button>
+    </div>
+
+    <div style="margin-top:30px;padding:15px;border:1px solid var(--border);">
+        <h2 style="letter-spacing:2px;font-size:14px;margin:0 0 10px 0;">SELF-REGISTRATION</h2>
+        <p style="color:#888;font-size:12px;margin:0 0 10px 0;">
+            When enabled, anyone reaching the login page can create their own account via <code>/register</code>.
+            Changes trigger an automatic service restart to take effect.
+        </p>
+        <label style="display:flex;gap:10px;align-items:center;cursor:pointer;">
+            <input type="checkbox" id="reg-toggle" {% if allow_registration %}checked{% endif %}>
+            <span id="reg-toggle-label">{{ 'Enabled' if allow_registration else 'Disabled' }}</span>
+        </label>
     </div>
 </div>
 
@@ -54,5 +64,23 @@ function sendSystemMsg() {
         body: JSON.stringify({ target: document.getElementById('sysmsg-target').value, message: document.getElementById('sysmsg-content').value })
     }).then(r => r.json()).then(d => { if(d.ok) { alert('Sent!'); document.getElementById('sysmsg-modal').classList.add('hidden'); } else alert(d.error); });
 }
+document.getElementById('reg-toggle').addEventListener('change', function() {
+    const val = this.checked ? 'yes' : 'no';
+    const label = document.getElementById('reg-toggle-label');
+    label.textContent = 'Applying…';
+    const fd = new FormData(); fd.append('allow_registration', val);
+    fetch('/api/admin/registration-toggle', { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(d => {
+          if (d.ok) {
+              label.textContent = (val === 'yes' ? 'Enabled' : 'Disabled') + ' — service restarting…';
+              setTimeout(() => { label.textContent = (val === 'yes' ? 'Enabled' : 'Disabled'); }, 4000);
+          } else {
+              label.textContent = 'Error';
+              alert(d.error || 'Failed to update');
+          }
+      })
+      .catch(() => { label.textContent = 'Error'; });
+});
 </script>
 {% endblock %}

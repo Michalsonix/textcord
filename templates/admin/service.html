@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="padding:20px;max-width:760px;">
+    <div class="topbar" style="border:none;padding:0;margin-bottom:20px;">
+        <a href="/adminpage" class="btn">← Back</a>
+    </div>
+    <h1 style="text-transform:uppercase;letter-spacing:4px;margin-bottom:20px;">Service Control</h1>
+
+    <div class="stat-box" style="margin-bottom:20px;">
+        <div class="stat-label">textcord.service</div>
+        <div class="stat-value" id="svc-status">{{ status }}</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+        <button class="btn btn-success" onclick="svc('start')">Start</button>
+        <button class="btn" onclick="svc('restart')">Restart</button>
+        <button class="btn btn-danger" onclick="svc('stop')">Stop</button>
+    </div>
+
+    <pre id="svc-log" style="margin-top:20px;background:var(--bg);border:1px solid var(--border);padding:10px;color:var(--text-bright);min-height:80px;white-space:pre-wrap;"></pre>
+    <p style="opacity:.7;font-size:12px;margin-top:10px;">
+        Stopping the service will terminate this web app. You will need shell access
+        (or another admin host) to start it again.
+    </p>
+</div>
+<script>
+function svc(action) {
+    if (action === 'stop' && !confirm('Stop textcord.service? The web UI will become unreachable.')) return;
+    fetch('/api/admin/service/' + action, {method:'POST'})
+        .then(r => r.json())
+        .then(d => {
+            document.getElementById('svc-status').textContent = d.status || 'unknown';
+            document.getElementById('svc-log').textContent = (d.ok ? '[OK] ' : '[FAIL] ') + (d.message || '');
+        })
+        .catch(e => { document.getElementById('svc-log').textContent = 'Error: ' + e; });
+}
+</script>
+{% endblock %}

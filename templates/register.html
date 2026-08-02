@@ -2,40 +2,34 @@
 {% block content %}
 <div class="login-page">
     <div class="login-box">
-        <h1>Register</h1>
-        {% if error %}
-        <div class="error-msg">{{ error }}</div>
-        {% endif %}
-        <form method="POST" id="register-form">
-            <input type="hidden" name="device_fp" id="device_fp">
-            <div class="form-row"><label>Identifier (login)</label><input type="text" name="identifier" required autofocus></div>
-            <div class="form-row"><label>First name</label><input type="text" name="first_name" required></div>
-            <div class="form-row"><label>Last name</label><input type="text" name="last_name" required></div>
-            <div class="form-row"><label>Nickname (optional)</label><input type="text" name="nickname"></div>
-            <div class="form-row"><label>Password (min 6 chars)</label><input type="password" name="password" required minlength="6"></div>
-            <button type="submit" class="btn btn-full" style="margin-top:10px;">Create account</button>
+        <h1>Create Account</h1>
+        {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+        <form method="POST">
+            <div class="form-row">
+                <label>Identifier</label>
+                <input type="text" name="identifier" required autofocus>
+            </div>
+            <div class="form-row">
+                <label>First name</label>
+                <input type="text" name="first_name" required>
+            </div>
+            <div class="form-row">
+                <label>Last name</label>
+                <input type="text" name="last_name" required>
+            </div>
+            <div class="form-row">
+                <label>Nickname (optional)</label>
+                <input type="text" name="nickname">
+            </div>
+            <div class="form-row">
+                <label>Password</label>
+                <input type="password" name="password" required>
+            </div>
+            <button type="submit" class="btn btn-full" style="margin-top:10px;">Register</button>
         </form>
-        <div class="login-links"><a href="/login">Back to login</a></div>
+        <div class="login-links">
+            <a href="/login">Back to login</a>
+        </div>
     </div>
 </div>
-<script>
-// Compute fingerprint and inject into form before submit
-(async function(){
-    try {
-        var parts = [navigator.userAgent, navigator.language, screen.width+'x'+screen.height+'x'+screen.colorDepth, new Date().getTimezoneOffset(), (navigator.hardwareConcurrency||'')+'/'+(navigator.deviceMemory||'')];
-        try {
-            var cv = document.createElement('canvas'); cv.width=200; cv.height=50;
-            var ctx = cv.getContext('2d');
-            ctx.textBaseline='top'; ctx.font='14px Arial'; ctx.fillStyle='#f60'; ctx.fillRect(0,0,200,50);
-            ctx.fillStyle='#069'; ctx.fillText('textcord-fp',2,15);
-            parts.push(cv.toDataURL().slice(-64));
-        } catch(_) {}
-        var buf = new TextEncoder().encode(parts.join('|'));
-        var hash = await crypto.subtle.digest('SHA-256', buf);
-        var hex = Array.from(new Uint8Array(hash)).map(function(x){return x.toString(16).padStart(2,'0');}).join('');
-        document.getElementById('device_fp').value = hex;
-        document.cookie = 'device_fp='+hex+'; path=/; max-age=31536000; SameSite=Lax';
-    } catch(e) {}
-})();
-</script>
 {% endblock %}

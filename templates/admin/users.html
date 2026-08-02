@@ -54,7 +54,7 @@ function showPanel(panel) {
     if (panel === 'login-logs') {
         col.innerHTML = `<h2>Login Logs</h2>` + userData.login_logs.map(l =>
             `<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:5px 0;font-size:12px;">
-                <span>${l.date} · ${l.ip || '-'} · ${l.mac || '-'} · ${l.success ? '✓' : '✗'}</span>
+                <span>${l.date} - ${l.ip} - ${l.success ? '✓' : '✗'}</span>
                 <button class="btn" style="padding:2px 6px;font-size:10px;" onclick="deleteLog('${l.id}')">Del</button>
             </div>`
         ).join('') || '<p style="color:var(--text-dim);">No logs</p>';

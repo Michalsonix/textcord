@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width:780px;margin:30px auto;padding:0 16px;font-family:ui-monospace,Menlo,monospace;color:var(--text,#ddd);">
+  <pre style="line-height:1;font-size:10px;text-align:center;color:#bbb;margin:0 0 10px 0;">
+      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+      ░░░░░░░░░░░░░░░  T E X T C O R D   S E T U P  ░░░░░░░░░░░░░
+      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  </pre>
+  <h1 style="text-align:center;font-size:18px;letter-spacing:2px;">Stwórz konto administratora</h1>
+  {% if error %}<p style="color:#f55;text-align:center;">{{ error }}</p>{% endif %}
+  <form method="POST" style="display:flex;flex-direction:column;gap:10px;margin-top:20px;">
+    <label>ID LOGIN:<input name="identifier" required style="width:100%;padding:6px;background:#111;color:#eee;border:1px solid #444;"></label>
+    <label>FIRST NAME:<input name="first_name" required style="width:100%;padding:6px;background:#111;color:#eee;border:1px solid #444;"></label>
+    <label>LAST NAME:<input name="last_name" required style="width:100%;padding:6px;background:#111;color:#eee;border:1px solid #444;"></label>
+    <label>NICKNAME (OPTIONAL):<input name="nickname" style="width:100%;padding:6px;background:#111;color:#eee;border:1px solid #444;"></label>
+    <label>PASSWORD:<input name="password" type="password" required style="width:100%;padding:6px;background:#111;color:#eee;border:1px solid #444;"></label>
+    <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" name="create_recovery"> Create recovery file</label>
+    <button type="submit" style="padding:10px;background:#222;color:#eee;border:1px solid #666;cursor:pointer;letter-spacing:2px;">STWÓRZ</button>
+  </form>
+</div>
+{% endblock %}

@@ -22,48 +22,27 @@
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠛⢦⣄⡀⠀⠀⠀⠈⠉⠙⠓⠒⠦⢦⣤⣤⣄⣀⣀⣀⣀⣀⣀⠀⠀⠈⠁⠀⢀⣀⣀⣠⣤⠖⠉⠀⠀
     </div>
     <div class="login-box">
-        <h1>Login Page</h1>
+        <h1 data-i18n="login.title">Login Page</h1>
         {% if error %}
         <div class="error-msg">{{ error }}</div>
         {% endif %}
         <form method="POST">
             <div class="form-row">
-                <label>Login</label>
-                <input type="text" name="identifier" placeholder="Identifier" required autofocus>
+                <label data-i18n="login.identifier">Identifier</label>
+                <input type="text" name="identifier" data-i18n-placeholder="login.identifier" placeholder="Identifier" required autofocus>
             </div>
             <div class="form-row">
-                <label>Password</label>
-                <input type="password" name="password" placeholder="Password" required>
+                <label data-i18n="login.password">Password</label>
+                <input type="password" name="password" data-i18n-placeholder="login.password" placeholder="Password" required>
             </div>
-            <button type="submit" class="btn btn-full" style="margin-top: 10px;">Login</button>
+            <button type="submit" class="btn btn-full" data-i18n="login.submit" style="margin-top: 10px;">Login</button>
         </form>
         <div class="login-links">
-            <a href="/login/recovery">Reset password by file</a>
+            <a href="/login/recovery" data-i18n="login.reset">Reset password by file</a>
             {% if allow_registration %}
-            <a href="/register" style="margin-left:15px;">Register</a>
+            &nbsp;·&nbsp;<a href="/register">Register</a>
             {% endif %}
         </div>
     </div>
 </div>
-<script>
-// Lightweight device fingerprint stored as cookie so server can use it when ARP fails (non-LAN clients).
-(function(){
-    try {
-        var c = document.cookie.split(';').some(function(x){return x.trim().indexOf('device_fp=')===0;});
-        if (c) return;
-        var parts = [navigator.userAgent, navigator.language, screen.width+'x'+screen.height+'x'+screen.colorDepth, new Date().getTimezoneOffset(), (navigator.hardwareConcurrency||'')+'/'+(navigator.deviceMemory||'')];
-        try {
-            var cv = document.createElement('canvas'); cv.width=200; cv.height=50;
-            var ctx = cv.getContext('2d');
-            ctx.textBaseline='top'; ctx.font='14px Arial'; ctx.fillStyle='#f60'; ctx.fillRect(0,0,200,50);
-            ctx.fillStyle='#069'; ctx.fillText('textcord-fp',2,15);
-            parts.push(cv.toDataURL().slice(-64));
-        } catch(_) {}
-        async function sha(s){ var b=new TextEncoder().encode(s); var h=await crypto.subtle.digest('SHA-256', b); return Array.from(new Uint8Array(h)).map(function(x){return x.toString(16).padStart(2,'0');}).join(''); }
-        sha(parts.join('|')).then(function(fp){
-            document.cookie='device_fp='+fp+'; path=/; max-age=31536000; SameSite=Lax';
-        });
-    } catch(_) {}
-})();
-</script>
 {% endblock %}
